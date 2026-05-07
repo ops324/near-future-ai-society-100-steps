@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+*.egg-info/
+
+# Logs
+*.log
+
+# Simulation outputs (large)
+output_no_intro/
+output/
+output_*/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local
+.claude/scheduled_tasks.lock

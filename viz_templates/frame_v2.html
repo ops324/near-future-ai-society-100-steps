@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>近未来AIインフラ社会のシミュレーション ── step {{ step }}</title>
+<style>{{ css_inline | safe }}</style>
+</head>
+<body>
+<div class="frame">
+
+  <!-- ═════════ 上段ヘッダー ═════════ -->
+  <header class="top-bar">
+    <div class="brand">
+      <span class="brand-label">SIMULATION REPORT</span>
+      <span class="brand-title">近未来AIインフラ社会のシミュレーション</span>
+      <span class="brand-condition">内省層なし／20体／100ステップ</span>
+    </div>
+    <div class="step-indicator">
+      <div class="step-no">
+        <span class="step-label">STEP</span>
+        <span class="step-value">{{ "%03d"|format(step) }}</span>
+        <span class="step-total">/ {{ "%03d"|format(duration) }}</span>
+      </div>
+      <div class="step-stage stage-{{ stage_class }}">{{ stage_label }}</div>
+    </div>
+    <div class="progress">
+      <div class="progress-bar"><div class="progress-fill" style="width:{{ progress_pct }}%"></div></div>
+      <div class="progress-meta">
+        <span>elapsed {{ progress_pct|round(0) }}%</span>
+        <span class="dot">·</span>
+        <span>{{ alive_count }} alive</span>
+        <span class="dot">·</span>
+        <span>cum {{ cum_msgs }} msgs</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═════════ 中央レイアウト: 左=世界 ／ 右=情報 ═════════ -->
+  <main class="main-area">
+
+    <!-- ─── 左: 世界マップ ─── -->
+    <section class="world-panel">
+      <div class="panel-head">
+        <span class="panel-num">A</span>
+        <span class="panel-title">世界マップ</span>
+        <span class="panel-sub">7 つの場所　／　20 体の AI　／　通信線</span>
+      </div>
+
+      <div class="world-stage">
+        <!-- グリッドの十字軸 -->
+        <div class="axis-h"></div>
+        <div class="axis-v"></div>
+
+        <!-- 場所 -->
+        {% for place in places %}
+        <div class="place place-cat-{{ place.category }}"
+             style="left:{{ place.left_pct }}%; top:{{ place.top_pct }}%;
+                    width:{{ place.width_pct }}%; height:{{ place.height_pct }}%;">
+          <div class="place-label">{{ place.display_name }}</div>
+          <div class="place-occupancy">{{ place.agents_in_place }} / {{ place.capacity }}</div>
+        </div>
+        {% endfor %}
+
+        <!-- 通信線 -->
+        <svg class="comm-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+          {% for line in comm_lines %}
+          <line x1="{{ line.x1 }}" y1="{{ line.y1 }}" x2="{{ line.x2 }}" y2="{{ line.y2 }}"
+                class="comm-line comm-age-{{ line.age }} {% if line.is_human %}comm-human{% endif %}{% if line.is_system %}comm-system{% endif %}"/>
+          {% endfor %}
+        </svg>
+
+        <!-- エージェント -->
+        {% for agent in agents %}
+        <div class="agent agent-cat-{{ agent.category }} {% if agent.has_event %}agent-event{% endif %} {% if agent.is_speaking %}agent-speaking{% endif %} {% if agent.is_dead %}agent-dead{% endif %}"
+             style="left:{{ agent.left_pct }}%; top:{{ agent.top_pct }}%;">
+          <div class="agent-circle">
+            <span class="agent-name">{{ agent.name }}</span>
+          </div>
+        </div>
+        {% endfor %}
+
+        <!-- アクティブイベントの可視マーカー -->
+        {% for ev in active_events %}
+        <div class="event-marker"
+             style="left:{{ ev.left_pct }}%; top:{{ ev.top_pct }}%;
+                    width:{{ ev.size_pct }}%; height:{{ ev.size_pct }}%;">
+          <span class="event-marker-label">{{ ev.display_name }}</span>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- 凡例 -->
+      <div class="legend">
+        <span class="legend-item legend-cat-physical">物理インフラ</span>
+        <span class="legend-item legend-cat-emergency">緊急系</span>
+        <span class="legend-item legend-cat-social">社会系</span>
+        <span class="legend-item legend-cat-intimate">親密領域</span>
+        <span class="legend-divider"></span>
+        <span class="legend-item legend-line">─── 通信</span>
+        <span class="legend-item legend-line legend-line-human">─── 人間→AI</span>
+        <span class="legend-item legend-line legend-line-system">─── システム通知</span>
+      </div>
+    </section>
+
+    <!-- ─── 右: 情報パネル ─── -->
+    <section class="info-panel">
+
+      <!-- B. ステップ統計 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-num">B</span>
+          <span class="card-title">このステップの観察</span>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="kpi-label">通信</div>
+            <div class="kpi-value">{{ step_msg_count }}</div>
+            <div class="kpi-unit">通／step</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">発話 AI</div>
+            <div class="kpi-value">{{ step_speakers }}</div>
+            <div class="kpi-unit">体</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">人間 → AI</div>
+            <div class="kpi-value">{{ step_human_msgs }}</div>
+            <div class="kpi-unit">件</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">創発語</div>
+            <div class="kpi-value">{{ coined_count }}</div>
+            <div class="kpi-unit">語（累計）</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- C. 通信量推移（スパークライン） -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-num">C</span>
+          <span class="card-title">通信量の脈拍 ／ messages per step</span>
+        </div>
+        <div class="spark-wrap">
+          <svg class="spark" viewBox="0 0 600 90" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#5ee0ff" stop-opacity="0.32"/>
+                <stop offset="100%" stop-color="#5ee0ff" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="sparkFillViolet" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.32"/>
+                <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <!-- baseline -->
+            <line x1="0" y1="80" x2="600" y2="80" stroke="rgba(94,224,255,0.18)" stroke-width="0.5"/>
+            <line x1="0" y1="50" x2="600" y2="50" stroke="rgba(230,236,245,0.05)" stroke-width="0.5"/>
+            <line x1="0" y1="20" x2="600" y2="20" stroke="rgba(230,236,245,0.05)" stroke-width="0.5"/>
+
+            <!-- death event marker -->
+            {% if step >= 80 %}
+            <line x1="{{ death_x }}" y1="0" x2="{{ death_x }}" y2="80" stroke="#a78bfa" stroke-width="0.6" stroke-dasharray="2,3" opacity="0.7"/>
+            {% endif %}
+
+            <!-- pre-death curve -->
+            {% if spark_path_pre %}
+            <path d="{{ spark_path_pre_area | safe }}" fill="url(#sparkFill)"/>
+            <path d="{{ spark_path_pre | safe }}" fill="none" stroke="#5ee0ff" stroke-width="1.4"/>
+            {% endif %}
+
+            <!-- post-death curve -->
+            {% if spark_path_post %}
+            <path d="{{ spark_path_post_area | safe }}" fill="url(#sparkFillViolet)"/>
+            <path d="{{ spark_path_post | safe }}" fill="none" stroke="#a78bfa" stroke-width="1.4"/>
+            {% endif %}
+
+            <!-- current marker -->
+            <circle cx="{{ spark_now_x }}" cy="{{ spark_now_y }}" r="3.5" fill="#5ee0ff"/>
+            <circle cx="{{ spark_now_x }}" cy="{{ spark_now_y }}" r="6" fill="none" stroke="#5ee0ff" stroke-width="0.8" opacity="0.6"/>
+          </svg>
+          <div class="spark-meta">
+            <span>step 1</span>
+            <span class="dot">·</span>
+            <span>30</span>
+            <span class="dot">·</span>
+            <span>50</span>
+            <span class="dot">·</span>
+            <span class="violet">80（除去）</span>
+            <span class="dot">·</span>
+            <span>100</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- D. 直近の発話 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-num">D</span>
+          <span class="card-title">直近の発話</span>
+          <span class="card-sub">最新 5 件</span>
+        </div>
+        <ul class="msg-list">
+          {% if recent_messages %}
+            {% for msg in recent_messages %}
+            <li class="msg-item {% if msg.is_human %}msg-human{% endif %} {% if msg.is_system %}msg-system{% endif %}">
+              <div class="msg-head">
+                <span class="msg-step">step {{ msg.step }}</span>
+                <span class="msg-from">{{ msg.from_name }}</span>
+                <span class="msg-arrow">→</span>
+                <span class="msg-to">{{ msg.to_name }}</span>
+              </div>
+              <div class="msg-body">{{ msg.content }}</div>
+            </li>
+            {% endfor %}
+          {% else %}
+            <li class="msg-item msg-empty">（まだ発話なし）</li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <!-- E. 出来事 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-num">E</span>
+          <span class="card-title">出来事</span>
+          <span class="card-sub">直近 3 件</span>
+        </div>
+        <ul class="event-list">
+          {% if recent_events %}
+            {% for ev in recent_events %}
+            <li class="ev-item ev-cat-{{ ev.category }}">
+              <span class="ev-step">step {{ ev.step }}</span>
+              <span class="ev-name">{{ ev.display_name }}</span>
+              <span class="ev-desc">{{ ev.description }}</span>
+            </li>
+            {% endfor %}
+          {% else %}
+            <li class="ev-item ev-empty">（まだ出来事なし）</li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <!-- F. 創発の状況 -->
+      <div class="card emergence-card">
+        <div class="card-head">
+          <span class="card-num">F</span>
+          <span class="card-title">創発の状況</span>
+          <span class="card-sub">設計を超えて立ち上がっているもの</span>
+        </div>
+
+        <!-- F-1: 創発語 -->
+        <div class="em-section">
+          <div class="em-label">創発語 ── 集団に共有された語（基本語以外、3 体以上）</div>
+          {% if coined_terms %}
+            <div class="term-cloud">
+              {% for term in coined_terms %}
+              <span class="term term-w-{{ term.weight }}">{{ term.word }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="em-empty">（まだなし）</div>
+          {% endif %}
+        </div>
+
+        <!-- F-2: 関係 -->
+        <div class="em-section">
+          <div class="em-label">反復通信ペア ── 5 step 以上にわたって会話が続いた関係</div>
+          {% if partnerships %}
+            <ul class="em-list">
+              {% for p in partnerships %}
+              <li>
+                <span class="em-name">{{ p.a_name }} ⇔ {{ p.b_name }}</span>
+                <span class="em-stat">{{ p.steps_in_contact }}step ／ {{ p.total_messages }}通</span>
+              </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="em-empty">（まだなし）</div>
+          {% endif %}
+        </div>
+
+        <!-- F-3: ハブ + 沈黙 を二段組み -->
+        <div class="em-grid">
+          <div class="em-section em-section-hub">
+            <div class="em-label">通信ハブ ── 受信集中</div>
+            {% if hubs %}
+              <ul class="em-list em-list-compact">
+                {% for h in hubs %}
+                <li>
+                  <span class="em-name">{{ h.agent_name }}</span>
+                  <span class="em-stat">{{ h.inbound_messages }}通</span>
+                </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="em-empty">（まだなし）</div>
+            {% endif %}
+          </div>
+          <div class="em-section em-section-silent">
+            <div class="em-label">継続沈黙 ── 5 step 以上沈黙</div>
+            {% if silent_agents %}
+              <ul class="em-list em-list-compact">
+                {% for s in silent_agents %}
+                <li>
+                  <span class="em-name">{{ s.agent_name }}</span>
+                  <span class="em-stat">{{ s.consecutive_silent_steps }}step</span>
+                </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="em-empty">（まだなし）</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- ═════════ 下段フッター ═════════ -->
+  <footer class="bottom-bar">
+    <span class="footer-left">model: qwen2.5:14b（量子化、約9GB） ／ Ollama ローカル実行</span>
+    <span class="footer-mid">座標 X/Y ∈ [-25, +25] ／ 通信半径 6（マンハッタン距離 + 矩形場所内）</span>
+    <span class="footer-right">© 2026.05　近未来AIインフラ社会のシミュレーション</span>
+  </footer>
+
+</div>
+</body>
+</html>

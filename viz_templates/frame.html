@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>第四回シミュレーション ステップ {{ step }}</title>
+<link rel="stylesheet" href="frame.css">
+</head>
+<body class="theme-dark-elegant">
+<div class="frame">
+
+  <!-- ─────── 左パネル: 2D World ─────── -->
+  <div class="left-panel">
+    <header class="left-header">
+      <h1 class="title">近未来AIインフラ社会</h1>
+      <p class="subtitle">第四回シミュレーション</p>
+    </header>
+
+    <div class="world-stage">
+      <!-- 場所 -->
+      {% for place in places %}
+      <div class="place place-cat-{{ place.category }}"
+           style="left:{{ place.left_pct }}%; top:{{ place.top_pct }}%;
+                  width:{{ place.width_pct }}%; height:{{ place.height_pct }}%;">
+        <div class="place-label">{{ place.display_name }}</div>
+        <div class="place-occupancy">{{ place.agents_in_place }} / {{ place.capacity }}</div>
+      </div>
+      {% endfor %}
+
+      <!-- 通信線 -->
+      <svg class="comm-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {% for line in comm_lines %}
+        <line x1="{{ line.x1 }}" y1="{{ line.y1 }}" x2="{{ line.x2 }}" y2="{{ line.y2 }}"
+              class="comm-line comm-age-{{ line.age }}"/>
+        {% endfor %}
+      </svg>
+
+      <!-- エージェント -->
+      {% for agent in agents %}
+      <div class="agent agent-cat-{{ agent.category }}{% if agent.has_event %} agent-event{% endif %}"
+           style="left:{{ agent.left_pct }}%; top:{{ agent.top_pct }}%;">
+        <div class="agent-circle">
+          <span class="agent-name">{{ agent.name }}</span>
+        </div>
+        <div class="agent-id">#{{ agent.id }}</div>
+      </div>
+      {% endfor %}
+
+      <!-- アクティブイベントの可視マーカー -->
+      {% for ev in active_events %}
+      <div class="event-marker"
+           style="left:{{ ev.left_pct }}%; top:{{ ev.top_pct }}%;
+                  width:{{ ev.size_pct }}%; height:{{ ev.size_pct }}%;">
+        <span class="event-marker-label">{{ ev.display_name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- 凡例 -->
+    <div class="legend">
+      <span class="legend-item legend-cat-physical">物理インフラ</span>
+      <span class="legend-item legend-cat-emergency">危機対応</span>
+      <span class="legend-item legend-cat-social">社会インフラ</span>
+      <span class="legend-item legend-cat-intimate">親密領域</span>
+      <span class="legend-item legend-cat-regulation">規制</span>
+      <span class="legend-item legend-cat-maintenance">整備</span>
+      <span class="legend-item legend-cat-memorial">追悼</span>
+    </div>
+  </div>
+
+  <!-- ─────── 右パネル: 物語 ─────── -->
+  <div class="right-panel">
+    <header class="step-header">
+      <div class="step-counter">
+        <span class="step-label">STEP</span>
+        <span class="step-value">{{ "%03d"|format(step) }}</span>
+        <span class="step-total">/ {{ "%03d"|format(duration) }}</span>
+      </div>
+      <div class="time-bar">
+        <div class="time-bar-fill" style="width:{{ progress_pct }}%;"></div>
+      </div>
+    </header>
+
+    <section class="panel-section">
+      <h3 class="section-title">出来事</h3>
+      <ul class="event-list">
+        {% if recent_events %}
+          {% for ev in recent_events %}
+          <li class="event-item event-cat-{{ ev.category }}">
+            <span class="event-step">step {{ ev.step }}</span>
+            <span class="event-name">{{ ev.display_name }}</span>
+            <span class="event-desc">{{ ev.description }}</span>
+          </li>
+          {% endfor %}
+        {% else %}
+          <li class="event-item event-empty">（まだ重大な出来事は発生していない）</li>
+        {% endif %}
+      </ul>
+    </section>
+
+    <section class="panel-section">
+      <h3 class="section-title">行動・発話</h3>
+      <ul class="message-list">
+        {% if recent_messages %}
+          {% for msg in recent_messages %}
+          <li class="message-item{% if msg.is_human %} message-human{% endif %}">
+            <div class="message-meta">
+              <span class="message-from">{{ msg.from_name }}</span>
+              <span class="message-arrow">→</span>
+              <span class="message-to">{{ msg.to_name }}</span>
+            </div>
+            <div class="message-body">{{ msg.content }}</div>
+          </li>
+          {% endfor %}
+        {% else %}
+          <li class="message-item event-empty">（直近の発話なし）</li>
+        {% endif %}
+      </ul>
+    </section>
+
+    <section class="panel-section">
+      <h3 class="section-title">心境（直近の内省）</h3>
+      <div class="thought-list">
+        {% if recent_thoughts %}
+          {% for th in recent_thoughts %}
+          <div class="thought-card thought-cat-{{ th.category }}">
+            <div class="thought-name">{{ th.agent_name }}</div>
+            <div class="thought-body">「{{ th.thought }}」</div>
+            {% if th.diff_summary %}
+            <div class="thought-diff">{{ th.diff_summary }}</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="thought-card event-empty">（まだ内省記録なし）</div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <h3 class="section-title">創発</h3>
+
+      <!-- 語彙 -->
+      <div class="emergent-block">
+        <div class="emergent-label">語彙</div>
+        {% if coined_terms %}
+          <div class="term-cloud">
+            {% for term in coined_terms %}
+            <span class="term term-weight-{{ term.weight }}">{{ term.word }}</span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="emergent-empty">（まだ創発語なし）</div>
+        {% endif %}
+      </div>
+
+      <!-- 関係（通信パートナーシップ） -->
+      <div class="emergent-block">
+        <div class="emergent-label">関係（反復通信ペア）</div>
+        {% if partnerships %}
+          <ul class="emergent-list">
+            {% for p in partnerships %}
+            <li><span class="emergent-name">{{ p.a_name }} ⇔ {{ p.b_name }}</span><span class="emergent-stat">{{ p.steps_in_contact }}step / {{ p.total_messages }}通</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="emergent-empty">（まだ反復ペアなし）</div>
+        {% endif %}
+      </div>
+
+      <!-- 場所への引力 -->
+      <div class="emergent-block">
+        <div class="emergent-label">引力（ホーム外への吸引）</div>
+        {% if attractors %}
+          <ul class="emergent-list">
+            {% for a in attractors %}
+            <li><span class="emergent-name">{{ a.agent_name }}</span> → {{ a.attracted_to_display }} <span class="emergent-stat">{{ a.visit_count }}回</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="emergent-empty">（まだ引力パターンなし）</div>
+        {% endif %}
+      </div>
+
+      <!-- ハブ -->
+      {% if hubs %}
+      <div class="emergent-block">
+        <div class="emergent-label">通信ハブ（受信集中）</div>
+        <ul class="emergent-list">
+          {% for h in hubs %}
+          <li><span class="emergent-name">{{ h.agent_name }}</span><span class="emergent-stat">受信 {{ h.inbound_messages }}通</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      <!-- 沈黙 -->
+      {% if silent_agents %}
+      <div class="emergent-block">
+        <div class="emergent-label">継続沈黙</div>
+        <ul class="emergent-list">
+          {% for s in silent_agents %}
+          <li><span class="emergent-name">{{ s.agent_name }}</span><span class="emergent-stat">{{ s.consecutive_silent_steps }}step無発話</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </section>
+
+    <footer class="right-footer">
+      <span class="footer-text">L0: qwen2.5:14b　／　L1: claude-haiku-4-5</span>
+    </footer>
+  </div>
+</div>
+</body>
+</html>

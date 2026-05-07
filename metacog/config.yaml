@@ -1,0 +1,60 @@
+# Metacognition Configuration — Round 4
+# L2a (リアルタイム観察者) は廃止。L1 (内省層) のみ。
+# 加えて、創発文化の観察を独立モジュールで行う。
+
+anthropic:
+  api_key_env: "ANTHROPIC_API_KEY"
+  model: "claude-haiku-4-5-20251001"
+  max_tokens: 1024
+  temperature: 0.8
+
+# ───────────────────────────────────────────
+# 内省層 (L1) 設定
+# ───────────────────────────────────────────
+introspection:
+  enabled: true
+  trigger_interval_steps: 10        # 何もなければ10stepに1回起動
+  cooldown_cycles: 3                # 同セクションは3サイクル以内に再書き換え不可
+  event_driven: true                # mark_eventがあれば即時起動
+  recent_steps_to_include: 10       # L1プロンプトに含める「直近の出来事」のstep範囲
+  max_recent_messages: 5            # L1プロンプトに含める最近受信メッセージ数
+  max_self_concept_chars: 100
+  max_current_goal_chars: 50
+  max_coping_notes_chars: 500
+  # P2: 他agentの声を内省プロンプトに含める
+  others_voices_speeches: 4         # 他agentの最近の発話を最大何件含めるか
+  others_voices_thoughts: 2         # 他agentの最近の内省を最大何件含めるか
+  others_voices_window: 10          # 「最近」とみなすstep数
+
+# ───────────────────────────────────────────
+# 創発文化観察 (Emergent Observer) 設定
+# ───────────────────────────────────────────
+emergent_observer:
+  enabled: true
+  baseline_vocab_path: "metacog/observers/baseline_jp_10k.txt"
+  # 語彙の創発
+  novelty_threshold_agents: 3       # 3エージェント以上で使われた語を「創発」と認定
+  min_token_length: 2               # 1文字の語は無視
+  # 通信パートナー創発（同じペアが反復して通信する）
+  partnership_threshold_steps: 5    # 5step以上で通信したペアを認定
+  # 場所アトラクター（ホーム以外の場所への自発的引力）
+  attractor_threshold_steps: 5      # 5step以上、ホーム外の特定場所に居たagentを認定
+  # 通信ハブ（受信メッセージが突出して多い）
+  hub_threshold_messages: 20        # 累積20以上の受信を持つagentを認定
+  # 沈黙パターン
+  silence_threshold_steps: 5        # 5step連続沈黙したagentを認定
+  log_every_n_steps: 1              # 毎ステップ観察
+
+# ───────────────────────────────────────────
+# Logging
+# ───────────────────────────────────────────
+logging:
+  log_dir: "metacog/logs"
+  console: true
+
+# ───────────────────────────────────────────
+# Orchestrator
+# ───────────────────────────────────────────
+orchestrator:
+  introspection_check_every_n_steps: 1   # 毎step、内省すべきagentがいるかチェック
+  max_concurrent_introspections: 5       # 並列実行可能な内省呼び出しの最大数

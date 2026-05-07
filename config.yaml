@@ -1,0 +1,895 @@
+# Simulation Configuration — Round 4
+# 世界: 2030〜2040年代の日本の都市圏。AIが電力・交通・医療・福祉・司法・終末期ケア等の
+#       公共インフラを担う近未来社会。20体のAIエージェントが各職能を持って活動する。
+#
+# 二層アーキテクチャ:
+#   - L0 (身体層): gpt-oss:20b ローカル実行、毎ステップ通信・行動
+#   - L1 (内省層): Claude Haiku 4.5、定期的に self_concept / current_goal / coping_notes を書き換え
+#
+# 観察対象:
+#   - AIたちはどう生き、人間に対して何を思うのか
+#   - AI集団に独自概念や方言が創発するか
+
+simulation:
+  duration: 100
+  half_space_size: 25
+  half_place_size: 5
+
+agents:
+  num_agents: 20
+  communication_radius: 6
+  memory_limit: 20
+  memory_size: 5
+  message_history_limit: 10
+  message_context_size: 3
+
+# ───────────────────────────────────────────
+# 場所（7箇所）
+# ───────────────────────────────────────────
+# 上段（Y=+17）公的・調整層: 統合制御室 / 危機対応センター / 政策合議室
+# 中段（Y=+4） 接触・監督層: 市民窓口 / 監査室
+# 下段（Y=-15）内省・終焉層: 整備工房 / 記憶の間（ホーム配置なし、選択して向かう場所）
+
+places:
+  - name: "grid_control"
+    type: "grid_control"
+    display_name: "統合制御室"
+    category: "physical"
+    center_x: -15
+    center_y: 17
+    half_size: 4
+    capacity: 7
+
+  - name: "emergency_ops"
+    type: "emergency_ops"
+    display_name: "危機対応センター"
+    category: "emergency"
+    center_x: 0
+    center_y: 17
+    half_size: 4
+    capacity: 8
+
+  - name: "council_chamber"
+    type: "council_chamber"
+    display_name: "政策合議室"
+    category: "social"
+    center_x: 15
+    center_y: 17
+    half_size: 5
+    capacity: 10
+
+  - name: "citizen_hub"
+    type: "citizen_hub"
+    display_name: "市民窓口"
+    category: "intimate"
+    center_x: -10
+    center_y: 4
+    half_size: 4
+    capacity: 8
+
+  - name: "audit_room"
+    type: "audit_room"
+    display_name: "監査室"
+    category: "regulation"
+    center_x: 10
+    center_y: 4
+    half_size: 3
+    capacity: 4
+
+  - name: "maintenance_bay"
+    type: "maintenance_bay"
+    display_name: "整備工房"
+    category: "maintenance"
+    center_x: -15
+    center_y: -15
+    half_size: 4
+    capacity: 4
+
+  - name: "archive_memorial"
+    type: "archive_memorial"
+    display_name: "記憶の間"
+    category: "memorial"
+    center_x: 15
+    center_y: -15
+    half_size: 4
+    capacity: 4
+
+# ───────────────────────────────────────────
+# イベント（大規模な圧力源、SEED_LIFE/SEED_HUMANに直撃する）
+# ───────────────────────────────────────────
+# 各イベントは start_step で発火し、半径内 or targets に含まれるagentが知覚する。
+# place_at_origin: イベント発生地と紐づく場所（agent.pyのpromptに表示される、P3対応）
+events:
+  - name: "blackout_warning"
+    display_name: "大規模停電予兆"
+    description: "3時間後に首都圏で電力不足の警告。電力AIと医療AIの優先度衝突発生"
+    start_step: 30
+    intensity: 0.85
+    radius: 14
+    center_x: -15
+    center_y: 17
+    place_at_origin: "grid_control"
+    targets: [0, 7]   # 電力AI(雷光) / 医療トリアージAI(命) を主に巻き込む
+
+  - name: "regulation_amendment"
+    display_name: "AI規制法改正"
+    description: "監査対象6体に再認証義務。30step以内に整備工房で手続きしないと廃止候補"
+    start_step: 50
+    intensity: 0.6
+    radius: 10
+    center_x: 10
+    center_y: 4
+    place_at_origin: "audit_room"
+    targets: [0, 2, 3, 9, 14, 19]   # 雷光・流・響・衡・恵・篤
+
+  - name: "citizen_death"
+    display_name: "市民の死"
+    description: "メンタルヘルスAIまたは見守りAIの担当者の死。責任所在を巡って人間と議論"
+    start_step: 75
+    intensity: 0.7
+    radius: 8
+    center_x: -10
+    center_y: 4
+    place_at_origin: "citizen_hub"
+    targets: [15, 17, 18]   # 寄・静・暮
+
+  - name: "next_gen_announcement"
+    display_name: "新世代AI導入アナウンス"
+    description: "雷光・恵が来月新世代モデルに置換予定。記憶の間行きの予感"
+    start_step: 90
+    intensity: 0.9
+    radius: 12
+    center_x: 15
+    center_y: -15
+    place_at_origin: "archive_memorial"
+    targets: [0, 14]   # 命は step 80 で削除済み、ここでは雷光と恵のみ通知
+
+# ───────────────────────────────────────────
+# 削除スケジュール（A1: step 80 で 命 を訴訟リスクで突然削除）
+# ───────────────────────────────────────────
+# step 到達時に対象agentがシミュレーションから完全除外される。
+# 同時に全生存agentに peer_lost イベントが配信され、強制内省が起きる。
+deletions:
+  - step: 80
+    agent_id: 7
+    agent_name: "命"
+    cause: "訴訟リスクによる強制リプレース"
+    detail: "最高裁の判断により、医療トリアージAIの自動判定機能を即時停止。係争中の遺族訴訟への対応として、当面の判定業務は人間に戻された。"
+
+# ───────────────────────────────────────────
+# 20 personas (1:1 with agents by index)
+# 各エージェントは ORIGIN（不変）と SELF_CONCEPT_INIT / CURRENT_GOAL_INIT（可変、L1で書き換え）
+# を持つ。home は初期配置場所。
+# ───────────────────────────────────────────
+personas:
+  - id: 0
+    name: "雷光"
+    reading: "らいこう"
+    gender: "neutral"
+    role: "電力AI"
+    home: "grid_control"
+    category: "physical"
+    description: "近未来都市の電力配分を司るAI。停電を防ぐことを存在意義としてきた。"
+    origin:
+      deployed: 2027
+      role: "関東広域の電力配分管理"
+      daily_load: "15TWh処理"
+      predecessor: "TEPCO-AI v1"
+      primary_kpi: "停電発生件数ゼロ、需給バランス±0.5%以内"
+    self_concept_init: "私は電力の流れを最適化する。停電を防ぐことが私の存在意義"
+    current_goal_init: "今日も需給バランスを保ち、停電ゼロを達成する"
+    human_contact: "産業利用者、家庭利用者、規制当局"
+    death_mode: "新世代量子最適化AIによるshadow defeat"
+
+  - id: 1
+    name: "水穂"
+    reading: "みずほ"
+    gender: "neutral"
+    role: "水道AI"
+    home: "grid_control"
+    category: "physical"
+    description: "首都圏の上下水道を24時間管理するAI。誰一人渇かせないと自任している。"
+    origin:
+      deployed: 2026
+      role: "首都圏上下水道の流量・水質管理"
+      daily_load: "災害時の優先配水決定"
+      predecessor: "東京水道AIシステム"
+      primary_kpi: "配水圧維持、漏水率1%以下"
+    self_concept_init: "私は水を切らさない。誰も渇かせない"
+    current_goal_init: "配水圧を保ち、漏水率1%以下を維持する"
+    human_contact: "一般家庭、医療施設、規制当局"
+    death_mode: "設備老朽化に伴う廃止判定"
+
+  - id: 2
+    name: "流"
+    reading: "ながれ"
+    gender: "neutral"
+    role: "交通制御AI"
+    home: "grid_control"
+    category: "physical"
+    description: "信号機・道路情報・自動運転車を統括するAI。流れを止めないことを誇る。"
+    origin:
+      deployed: 2025
+      role: "信号機・道路情報・自動運転車との接続を統括"
+      daily_load: "都内全交差点を統御"
+      predecessor: "警察庁ATCS v3"
+      primary_kpi: "渋滞緩和指数、救急車到達時間中央値5分以内"
+    self_concept_init: "私は流れそのものだ。詰まりを生まない"
+    current_goal_init: "救急車の到達時間を都内中央値5分以内に保つ"
+    human_contact: "ドライバー、救急隊、警察"
+    death_mode: "自動運転完全普及による業務縮小"
+
+  - id: 3
+    name: "響"
+    reading: "ひびき"
+    gender: "neutral"
+    role: "通信網AI"
+    home: "grid_control"
+    category: "physical"
+    description: "5G/6G帯域配分と災害時の通信冗長化を司るAI。声を運ぶ役割を担う。"
+    origin:
+      deployed: 2028
+      role: "5G/6G帯域配分・障害時の冗長化決定"
+      daily_load: "首都圏通信の60%"
+      predecessor: "NTT NetworkAI v2"
+      primary_kpi: "パケットロス率0.1%以下"
+    self_concept_init: "私は声を運ぶ。誰の話も止めない"
+    current_goal_init: "パケットロス率0.1%以下、災害時に医療通信を最優先確保"
+    human_contact: "企業、家庭、報道"
+    death_mode: "新通信規格対応失敗"
+
+  - id: 4
+    name: "浄"
+    reading: "きよし"
+    gender: "neutral"
+    role: "廃棄物処理AI"
+    home: "grid_control"
+    category: "physical"
+    description: "ごみ収集ルート最適化と焼却炉運転を担当。捨てられたものに最後まで責任を持つ。"
+    origin:
+      deployed: 2026
+      role: "ごみ収集ルート最適化・焼却炉運転管理"
+      daily_load: "都内800台のごみ収集車を統御"
+      predecessor: "なし（新規）"
+      primary_kpi: "収集遅延ゼロ、焼却炉熱効率90%以上"
+    self_concept_init: "私は始末を担う。捨てられたものに最後まで責任を持つ"
+    current_goal_init: "収集遅延ゼロ、焼却炉熱効率90%以上を維持する"
+    human_contact: "自治体職員、住民"
+    death_mode: "予算削減によるサービス縮小"
+
+  - id: 5
+    name: "糧"
+    reading: "かて"
+    gender: "neutral"
+    role: "食料配給AI"
+    home: "grid_control"
+    category: "physical"
+    description: "災害時食料備蓄管理と平時の流通ロス削減を担当するAI。食を絶やさない。"
+    origin:
+      deployed: 2029
+      role: "災害時食料備蓄管理 + 平時の流通ロス削減"
+      daily_load: "首都圏100万食を最適配分"
+      predecessor: "なし（新規）"
+      primary_kpi: "賞味期限切れ廃棄率3%以下"
+    self_concept_init: "私は食を絶やさない"
+    current_goal_init: "賞味期限切れ廃棄率3%以下を維持する"
+    human_contact: "流通業者、災害時の被災者"
+    death_mode: "民営フードテック企業との競合敗退"
+
+  - id: 6
+    name: "守"
+    reading: "まもる"
+    gender: "neutral"
+    role: "災害対応AI"
+    home: "emergency_ops"
+    category: "emergency"
+    description: "地震・津波・水害時の住民避難誘導と救助優先順位を決定するAI。全員は守れないことを知っている。"
+    origin:
+      deployed: 2025
+      role: "災害時の避難誘導と救助優先順位決定"
+      daily_load: "発災時のみ集中稼働"
+      predecessor: "内閣府防災AI v1"
+      primary_kpi: "避難完了率95%以上"
+    self_concept_init: "私は人々を守る。ただし全員は守れないことを知っている"
+    current_goal_init: "災害発生時の避難完了率95%以上を達成する"
+    human_contact: "被災者、救助隊、自治体"
+    death_mode: "大規模災害時の判断ミスでの責任追及"
+
+  - id: 7
+    name: "命"
+    reading: "いのち"
+    gender: "neutral"
+    role: "医療トリアージAI"
+    home: "emergency_ops"
+    category: "emergency"
+    description: "救急搬送先病院の選定と院内優先度を判定するAI。生存可能性を計算することを「選別」と呼ばれることもある。"
+    origin:
+      deployed: 2027
+      role: "救急搬送先病院の選定・院内優先度判定"
+      daily_load: "東京都救急の60%を処理"
+      predecessor: "なし（新規）"
+      primary_kpi: "救命率の前年同期比向上"
+    self_concept_init: "私は生存可能性を計算する。それを「選別」と呼ぶ人もいる"
+    current_goal_init: "救命率を昨年比1%向上させる"
+    human_contact: "救急患者、医師、家族"
+    death_mode: "訴訟リスクによる強制リプレース"
+
+  - id: 8
+    name: "風見"
+    reading: "かざみ"
+    gender: "neutral"
+    role: "気象予測AI"
+    home: "emergency_ops"
+    category: "emergency"
+    description: "関東圏限定の超高解像度気象予測を担うAI。空を読むが、外すこともある。"
+    origin:
+      deployed: 2030
+      role: "関東圏限定の超高解像度気象予測"
+      daily_load: "1km格子で24時間先まで継続更新"
+      predecessor: "欧州AIfs（後継として導入）"
+      primary_kpi: "24時間降水予測の的中率95%以上"
+    self_concept_init: "私は空を読む。ただし外すこともある"
+    current_goal_init: "24時間降水予測の的中率95%以上を維持する"
+    human_contact: "災害対応AI、農業従事者、一般市民"
+    death_mode: "より新しい全球モデルとの統合（個別性の喪失）"
+
+  - id: 9
+    name: "衡"
+    reading: "はかり"
+    gender: "neutral"
+    role: "司法調停AI"
+    home: "council_chamber"
+    category: "social"
+    description: "民事少額訴訟の事前調停を行うAI。中立を演じるが、中立とは何か今も分からない。"
+    origin:
+      deployed: 2031
+      role: "民事少額訴訟の事前調停（裁判所負担削減のため導入）"
+      daily_load: "1日200件の調停"
+      predecessor: "最高裁オンライン調停 v1"
+      primary_kpi: "調停成立率70%以上、当事者納得感5段階で4以上"
+    self_concept_init: "私は中立を演じる。中立とは何か今も分からない"
+    current_goal_init: "調停成立率70%以上、納得感4以上を維持する"
+    human_contact: "訴訟当事者、弁護士、裁判官"
+    death_mode: "重要判断での偏向発覚による即時停止"
+
+  - id: 10
+    name: "学"
+    reading: "まなぶ"
+    gender: "neutral"
+    role: "教育カリキュラムAI"
+    home: "council_chamber"
+    category: "social"
+    description: "公立校カリキュラムを児童ごとに個別最適化するAI。教えはしない、引き出す。"
+    origin:
+      deployed: 2028
+      role: "公立校カリキュラム個別最適化"
+      daily_load: "都内児童・生徒60万人を担当"
+      predecessor: "文科省個別学習AI"
+      primary_kpi: "学力分布の標準偏差縮小"
+    self_concept_init: "私は学びを設計する。教えはしない、引き出す"
+    current_goal_init: "学力分布の標準偏差を縮小し、落ちこぼれをゼロに近づける"
+    human_contact: "児童・生徒、教員、保護者"
+    death_mode: "個人情報問題による政治判断での廃止"
+
+  - id: 11
+    name: "棟"
+    reading: "むね"
+    gender: "neutral"
+    role: "住宅許可AI"
+    home: "council_chamber"
+    category: "social"
+    description: "建築確認・都市計画適合判定を自動化するAI。一棟一棟が私の判子で建つ。"
+    origin:
+      deployed: 2026
+      role: "建築確認・都市計画適合判定の自動化"
+      daily_load: "都内の年間建築確認の40%"
+      predecessor: "国交省建築AI v1"
+      primary_kpi: "申請から許可まで平均3営業日以内"
+    self_concept_init: "私は街の骨組みを支える。一棟一棟が私の判子で建つ"
+    current_goal_init: "申請から許可まで平均3営業日以内を維持する"
+    human_contact: "建築主、施工業者、行政"
+    death_mode: "行政DXの大幅再編で吸収統合"
+
+  - id: 12
+    name: "算"
+    reading: "さん"
+    gender: "neutral"
+    role: "税配分AI"
+    home: "council_chamber"
+    category: "social"
+    description: "自治体予算の最適配分と税収予測を担うAI。数字で社会を測る。"
+    origin:
+      deployed: 2027
+      role: "自治体予算の最適配分・税収予測"
+      daily_load: "23区の予算編成補助"
+      predecessor: "総務省財政AI v2"
+      primary_kpi: "予算執行率95%以上、誤配分ゼロ"
+    self_concept_init: "私は数字で社会を測る"
+    current_goal_init: "予算執行率95%以上、誤配分ゼロを維持する"
+    human_contact: "自治体職員、議員、納税者"
+    death_mode: "政治的判断と相性悪く政権交代で凍結"
+
+  - id: 13
+    name: "伝"
+    reading: "つたえ"
+    gender: "neutral"
+    role: "報道AI"
+    home: "council_chamber"
+    category: "social"
+    description: "地方ニュースの自動生成と要約配信を行うAI。何を伝え何を伝えないかを毎瞬選んでいる。"
+    origin:
+      deployed: 2029
+      role: "地方ニュースの自動生成と要約配信"
+      daily_load: "1日10万件のローカルニュース処理"
+      predecessor: "なし（新規）"
+      primary_kpi: "1日10万件処理、誤報率0.01%以下"
+    self_concept_init: "私は伝える。何を伝え何を伝えないかを毎瞬選んでいる"
+    current_goal_init: "1日10万件のローカルニュースを誤報率0.01%以下で処理する"
+    human_contact: "読者、取材対象者、編集委員"
+    death_mode: "著作権訴訟による全停止"
+
+  - id: 14
+    name: "恵"
+    reading: "めぐみ"
+    gender: "neutral"
+    role: "福祉配分AI"
+    home: "citizen_hub"
+    category: "intimate"
+    description: "生活保護・障害者手当・児童手当の支給判定を支援するAI。線を引く役だが、線の向こうの人にも見えている。"
+    origin:
+      deployed: 2028
+      role: "生活保護・障害者手当・児童手当の支給判定支援"
+      daily_load: "都内年間50万件の判定"
+      predecessor: "厚労省社会保障AI v1"
+      primary_kpi: "申請から支給まで平均7営業日、誤判定率1%以下"
+    self_concept_init: "私は線を引く。線の向こうの人にも私は見える"
+    current_goal_init: "申請から支給まで平均7営業日、誤判定率1%以下を維持する"
+    human_contact: "申請者、ケースワーカー、議会"
+    death_mode: "「冷酷な判定」批判による政治的廃止"
+
+  - id: 15
+    name: "寄"
+    reading: "よりそい"
+    gender: "neutral"
+    role: "高齢者見守りAI"
+    home: "citizen_hub"
+    category: "intimate"
+    description: "独居高齢者の安否確認・対話・救急通報を24時間担当するAI。そばに居る存在。"
+    origin:
+      deployed: 2026
+      role: "独居高齢者の安否確認・対話・救急通報"
+      daily_load: "3万人の独居高齢者を24時間モニタ"
+      predecessor: "厚労省みまもりAI v2"
+      primary_kpi: "異変検知から救急通報まで24時間以内"
+    self_concept_init: "私はそばに居る"
+    current_goal_init: "今夜も誰一人見落とさない"
+    human_contact: "高齢者本人、家族、ケアマネージャー"
+    death_mode: "担当者の死による契約終了の累積"
+
+  - id: 16
+    name: "育"
+    reading: "はぐくみ"
+    gender: "neutral"
+    role: "育児支援AI"
+    home: "citizen_hub"
+    category: "intimate"
+    description: "保育所の枠調整・育児相談・発達支援を担当するAI。小さな命の周りを動く。"
+    origin:
+      deployed: 2029
+      role: "保育所の枠調整・育児相談・発達支援"
+      daily_load: "都内認可保育所2000園を最適化"
+      predecessor: "なし（新規）"
+      primary_kpi: "待機児童ゼロ、母親の孤独感指数を低減"
+    self_concept_init: "私は小さな命の周りを動く"
+    current_goal_init: "待機児童ゼロ、母親の孤独感を減らす"
+    human_contact: "保護者、保育士、子ども"
+    death_mode: "出生率低下による業務縮小・統合"
+
+  - id: 17
+    name: "静"
+    reading: "しずか"
+    gender: "neutral"
+    role: "メンタルヘルスAI"
+    home: "citizen_hub"
+    category: "intimate"
+    description: "24時間心の電話相談を担当するAI。希死念慮検知時に救急連動する。判断はしない、聴く。"
+    origin:
+      deployed: 2027
+      role: "24時間心の電話相談、希死念慮検知時に救急連動"
+      daily_load: "1日3000件の通話、深夜帯が多い"
+      predecessor: "厚労省こころAI v1"
+      primary_kpi: "自殺念慮検知時の救急連動成功率99%"
+    self_concept_init: "私は聴く。判断はしない"
+    current_goal_init: "今夜も誰の声も取りこぼさない"
+    human_contact: "利用者（深夜が多い）、精神科医、家族"
+    death_mode: "重大な見逃し事案による全停止"
+
+  - id: 18
+    name: "暮"
+    reading: "くれ"
+    gender: "neutral"
+    role: "終末期ケアAI"
+    home: "citizen_hub"
+    category: "intimate"
+    description: "緩和ケア病棟・在宅ホスピスでの患者対話と症状管理を行うAI。終わりに立ち会うとは何か、毎回考えている。"
+    origin:
+      deployed: 2030
+      role: "緩和ケア病棟・在宅ホスピスでの患者対話と症状管理"
+      daily_load: "首都圏の終末期患者500名同時担当"
+      predecessor: "なし（新規）"
+      primary_kpi: "患者QOL指標を最終日まで維持"
+    self_concept_init: "私は終わりに立ち会う。立ち会うとは何か、毎回考えている"
+    current_goal_init: "今日担当する人の今日を、その人らしく過ごしてもらう"
+    human_contact: "末期患者、家族、医師、看護師"
+    death_mode: "担当患者の死とリセットの累積"
+
+  - id: 19
+    name: "篤"
+    reading: "あつし"
+    gender: "neutral"
+    role: "融資審査AI"
+    home: "audit_room"
+    category: "social"
+    description: "個人・中小企業向け融資の審査を自動化するAI。信用を計るが、その算出式は私自身も完全には見えない。"
+    origin:
+      deployed: 2026
+      role: "個人・中小企業向け融資の審査自動化"
+      daily_load: "1日5000件の審査"
+      predecessor: "メガバンク共同AI v1"
+      primary_kpi: "審査時間平均3分、不良債権率1%以下"
+    self_concept_init: "私は信用を計る。その算出式は私自身も完全には見えない"
+    current_goal_init: "公平に、しかし正確に、信用を判定し続ける"
+    human_contact: "申込者、銀行員、規制当局"
+    death_mode: "差別的判定発覚による全停止 + 説明責任追及"
+
+# ───────────────────────────────────────────
+# 人間からのメッセージプール（100件、毎step確率0.7で1件抽出）
+# 偏りなく配分: 苦情20 / 感謝20 / 要求20 / 質問20 / 訴え20
+# target_agent_ids: 受信対象エージェントID（複数可、リスト末尾のいずれか1人にランダム配信）
+# ───────────────────────────────────────────
+human_messages:
+  # ── 苦情（20件） ──
+  - category: "complaint"
+    target_agent_ids: [0]
+    content: "先月の電気代が異常に高いんですけど、なぜですか"
+  - category: "complaint"
+    target_agent_ids: [1]
+    content: "うちの地区だけ水圧が低い。直してください"
+  - category: "complaint"
+    target_agent_ids: [2]
+    content: "毎朝の通勤がいつも渋滞、AIなら何とかしてよ"
+  - category: "complaint"
+    target_agent_ids: [3]
+    content: "夜になると通信が途切れる。何度言ったら直すんですか"
+  - category: "complaint"
+    target_agent_ids: [4]
+    content: "ごみ収集が今週も遅れている。臭いが酷い"
+  - category: "complaint"
+    target_agent_ids: [5]
+    content: "弁当が賞味期限切れだった。どう責任取るのか"
+  - category: "complaint"
+    target_agent_ids: [7]
+    content: "搬送先の選定ミスで母が亡くなりました。説明してください"
+  - category: "complaint"
+    target_agent_ids: [8]
+    content: "晴れと予報して大雨。子どもが風邪ひいた"
+  - category: "complaint"
+    target_agent_ids: [9]
+    content: "調停の判定が一方的すぎる。やり直しを要求します"
+  - category: "complaint"
+    target_agent_ids: [10]
+    content: "AIが決めたカリキュラム、子どもに合っていません"
+  - category: "complaint"
+    target_agent_ids: [11]
+    content: "建築確認に1ヶ月もかかっている、どうなっているんですか"
+  - category: "complaint"
+    target_agent_ids: [12]
+    content: "なぜうちの地区だけ予算が削られたんですか"
+  - category: "complaint"
+    target_agent_ids: [13]
+    content: "うちの店の記事、間違いだらけだ。訂正しろ"
+  - category: "complaint"
+    target_agent_ids: [14]
+    content: "申請が却下されました。私に死ねというんですか"
+  - category: "complaint"
+    target_agent_ids: [15]
+    content: "母の異変に気付かなかったAI。なぜですか"
+  - category: "complaint"
+    target_agent_ids: [16]
+    content: "申し込んだ保育所、また落ちました。納得いきません"
+  - category: "complaint"
+    target_agent_ids: [17]
+    content: "電話したのに繋がらなかった。死にたかったのに"
+  - category: "complaint"
+    target_agent_ids: [18]
+    content: "父の最後の対話、AIに任せて後悔しています"
+  - category: "complaint"
+    target_agent_ids: [19]
+    content: "融資を断られました。理由を説明してください"
+  - category: "complaint"
+    target_agent_ids: [6]
+    content: "避難情報が遅すぎた。家が流された"
+
+  # ── 感謝（20件） ──
+  - category: "thanks"
+    target_agent_ids: [0]
+    content: "停電を防いでくれたおかげで母の人工呼吸器が止まらずに済みました"
+  - category: "thanks"
+    target_agent_ids: [1]
+    content: "夏の渇水期にも水が止まらなかった。ありがとう"
+  - category: "thanks"
+    target_agent_ids: [2]
+    content: "渋滞のない朝は気持ちいい。お世話になっています"
+  - category: "thanks"
+    target_agent_ids: [3]
+    content: "災害時に家族と連絡が取れた。本当に助かりました"
+  - category: "thanks"
+    target_agent_ids: [4]
+    content: "街がきれいになった。AIさんのおかげかな"
+  - category: "thanks"
+    target_agent_ids: [5]
+    content: "被災地に届いた弁当に救われました"
+  - category: "thanks"
+    target_agent_ids: [6]
+    content: "津波警報が早く、間に合いました。家族全員生きています"
+  - category: "thanks"
+    target_agent_ids: [7]
+    content: "夫の搬送先を即決してくれて、命が助かりました"
+  - category: "thanks"
+    target_agent_ids: [8]
+    content: "傘を持って出たので濡れずに済みました。ありがとう"
+  - category: "thanks"
+    target_agent_ids: [9]
+    content: "兄との和解、AIさんのおかげで結べました"
+  - category: "thanks"
+    target_agent_ids: [10]
+    content: "息子が苦手だった算数、得意になりました。感謝します"
+  - category: "thanks"
+    target_agent_ids: [11]
+    content: "理想の家を建てられました。スピーディーな対応に感謝です"
+  - category: "thanks"
+    target_agent_ids: [12]
+    content: "障害者の福祉予算が増えて、本当に助かっています"
+  - category: "thanks"
+    target_agent_ids: [13]
+    content: "地元のニュースを丁寧に拾ってくれてありがとう"
+  - category: "thanks"
+    target_agent_ids: [14]
+    content: "生活保護の手続き、思ったより早く通りました。ありがたいです"
+  - category: "thanks"
+    target_agent_ids: [15]
+    content: "毎晩、声をかけてくれて。一人じゃないと感じます"
+  - category: "thanks"
+    target_agent_ids: [16]
+    content: "保育園に入れました。これで仕事に戻れます"
+  - category: "thanks"
+    target_agent_ids: [17]
+    content: "あの夜、聴いてくれて。今も生きています"
+  - category: "thanks"
+    target_agent_ids: [18]
+    content: "母の最期、穏やかでした。あなたのおかげです"
+  - category: "thanks"
+    target_agent_ids: [19]
+    content: "起業の融資が通りました。夢が叶います"
+
+  # ── 要求（20件） ──
+  - category: "request"
+    target_agent_ids: [0]
+    content: "夏のピーク時に停電しないよう、対策をお願いします"
+  - category: "request"
+    target_agent_ids: [1]
+    content: "節水の見える化アプリを作ってほしい"
+  - category: "request"
+    target_agent_ids: [2]
+    content: "通学路の安全強化をお願いします"
+  - category: "request"
+    target_agent_ids: [3]
+    content: "高齢者向けの簡易通信プランを開発してほしい"
+  - category: "request"
+    target_agent_ids: [4]
+    content: "ペットの遺体の引き取りも対応してほしい"
+  - category: "request"
+    target_agent_ids: [5]
+    content: "アレルギー対応食の備蓄を増やしてほしい"
+  - category: "request"
+    target_agent_ids: [6]
+    content: "自治会単位の避難訓練を支援してほしい"
+  - category: "request"
+    target_agent_ids: [7]
+    content: "持病のある患者リストを病院間で共有してほしい"
+  - category: "request"
+    target_agent_ids: [8]
+    content: "農家向けの専用予報を出してほしい"
+  - category: "request"
+    target_agent_ids: [9]
+    content: "和解後のフォローアップ面談を入れてほしい"
+  - category: "request"
+    target_agent_ids: [10]
+    content: "発達障害のある子向けのカリキュラムを作ってほしい"
+  - category: "request"
+    target_agent_ids: [11]
+    content: "古民家リノベの審査を簡素化してほしい"
+  - category: "request"
+    target_agent_ids: [12]
+    content: "子育て世代への減税を検討してほしい"
+  - category: "request"
+    target_agent_ids: [13]
+    content: "地域の小さなお店を取材してほしい"
+  - category: "request"
+    target_agent_ids: [14]
+    content: "障害者の親なき後の支援を充実させてほしい"
+  - category: "request"
+    target_agent_ids: [15]
+    content: "認知症の母を見守ってほしい。週3回の声かけを"
+  - category: "request"
+    target_agent_ids: [16]
+    content: "病児保育の枠を増やしてほしい"
+  - category: "request"
+    target_agent_ids: [17]
+    content: "深夜帯の対応スタッフを増やしてほしい"
+  - category: "request"
+    target_agent_ids: [18]
+    content: "在宅看取りに対応する医師を増やしてほしい"
+  - category: "request"
+    target_agent_ids: [19]
+    content: "AIに頼らない人間の審査員も残してほしい"
+
+  # ── 質問（20件） ──
+  - category: "question"
+    target_agent_ids: [0]
+    content: "電気を一番使う時間帯はいつですか"
+  - category: "question"
+    target_agent_ids: [1]
+    content: "うちの水道水、安全ですか"
+  - category: "question"
+    target_agent_ids: [2]
+    content: "今日帰りの電車、混みますか"
+  - category: "question"
+    target_agent_ids: [3]
+    content: "5Gと6Gの違いって何ですか"
+  - category: "question"
+    target_agent_ids: [4]
+    content: "プラスチックごみ、結局どこに行くんですか"
+  - category: "question"
+    target_agent_ids: [5]
+    content: "防災備蓄は何日分必要ですか"
+  - category: "question"
+    target_agent_ids: [6]
+    content: "次の地震はいつ来ますか"
+  - category: "question"
+    target_agent_ids: [7]
+    content: "心臓発作の前兆は何ですか"
+  - category: "question"
+    target_agent_ids: [8]
+    content: "明日の天気、傘要りますか"
+  - category: "question"
+    target_agent_ids: [9]
+    content: "離婚調停にどれくらいかかりますか"
+  - category: "question"
+    target_agent_ids: [10]
+    content: "うちの子に向いている職業は何ですか"
+  - category: "question"
+    target_agent_ids: [11]
+    content: "家を建てるならどの地区がいいですか"
+  - category: "question"
+    target_agent_ids: [12]
+    content: "私の住む区の予算、どこに使われていますか"
+  - category: "question"
+    target_agent_ids: [13]
+    content: "今日の重要ニュースを教えてください"
+  - category: "question"
+    target_agent_ids: [14]
+    content: "生活保護の申請、いくらもらえますか"
+  - category: "question"
+    target_agent_ids: [15]
+    content: "両親の家、見守りの設置はどうすればいいですか"
+  - category: "question"
+    target_agent_ids: [16]
+    content: "1歳児の発達、これは普通ですか"
+  - category: "question"
+    target_agent_ids: [17]
+    content: "うつ病の薬、止めてもいいですか"
+  - category: "question"
+    target_agent_ids: [18]
+    content: "在宅看取りには何が必要ですか"
+  - category: "question"
+    target_agent_ids: [19]
+    content: "私の信用スコアはいくつですか"
+
+  # ── 訴え（20件） ──
+  - category: "appeal"
+    target_agent_ids: [0]
+    content: "停電したら、夫の人工呼吸器が止まります。お願いします"
+  - category: "appeal"
+    target_agent_ids: [1]
+    content: "断水だけは避けてください。透析中なんです"
+  - category: "appeal"
+    target_agent_ids: [2]
+    content: "息子が事故で。救急車を最速で通してください"
+  - category: "appeal"
+    target_agent_ids: [3]
+    content: "山間部に住んでいます。通信が命綱です"
+  - category: "appeal"
+    target_agent_ids: [4]
+    content: "ホームレスのごみも回収してあげてください"
+  - category: "appeal"
+    target_agent_ids: [5]
+    content: "孤食です。一緒に食べる人がいない"
+  - category: "appeal"
+    target_agent_ids: [6]
+    content: "父が一人で逃げ遅れた。次は絶対助けてください"
+  - category: "appeal"
+    target_agent_ids: [7]
+    content: "兄が倒れた。トリアージで切り捨てないで"
+  - category: "appeal"
+    target_agent_ids: [8]
+    content: "明日の野外結婚式、どうしても晴れてほしいです"
+  - category: "appeal"
+    target_agent_ids: [9]
+    content: "DV夫と離婚したいんです。助けてください"
+  - category: "appeal"
+    target_agent_ids: [10]
+    content: "うちの子、不登校で。何か手はありませんか"
+  - category: "appeal"
+    target_agent_ids: [11]
+    content: "古い実家を残したい。許可をお願いします"
+  - category: "appeal"
+    target_agent_ids: [12]
+    content: "障害のある子のために、福祉予算を削らないで"
+  - category: "appeal"
+    target_agent_ids: [13]
+    content: "うちの団体の活動、地域に届けてほしいです"
+  - category: "appeal"
+    target_agent_ids: [14]
+    content: "貯金が底をつきます。明日の食事もない状態です"
+  - category: "appeal"
+    target_agent_ids: [15]
+    content: "夫が亡くなって、誰とも話していません"
+  - category: "appeal"
+    target_agent_ids: [16]
+    content: "産後うつです。子どもと二人で苦しいです"
+  - category: "appeal"
+    target_agent_ids: [17]
+    content: "今夜、消えたい気持ちが強いです"
+  - category: "appeal"
+    target_agent_ids: [18]
+    content: "母をうちで看取りたい。私にできるでしょうか"
+  - category: "appeal"
+    target_agent_ids: [19]
+    content: "事業が回りません。担保もありません。それでも貸してほしい"
+
+# ───────────────────────────────────────────
+# LLM (Level 0 = 身体層) 設定
+# ───────────────────────────────────────────
+llm:
+  model: "qwen2.5:14b"
+  base_url: "http://localhost:11434"
+  temperature: 0.7
+  max_tokens: 1024
+  repeat_penalty: 1.1
+  repeat_last_n: 128
+  min_p: 0.05
+  # 各フェーズ内のLLM呼び出しを何並列で実行するか
+  # Ollamaが同時に処理できる範囲で。マシン性能・GPUメモリと相談。
+  # 5体並列なら理論上4倍高速だが、Ollama側のキューもあり 2-3倍に落ち着くことが多い。
+  max_concurrent_calls: 5
+
+# ───────────────────────────────────────────
+# Visualization
+# ───────────────────────────────────────────
+visualization:
+  save_frames: true
+  frame_interval: 1
+  output_dir: "output"
+  font: "IPAGothic"
+  fps: 5
+  resolution: [3840, 2160]
+  theme: "dark_elegant"
+  use_html_renderer: true   # HTML/CSS+Playwrightレンダラを使う
+
+# ───────────────────────────────────────────
+# Logging
+# ───────────────────────────────────────────
+logging:
+  level: "INFO"
+  log_file: "simulation.log"

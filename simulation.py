@@ -1,0 +1,682 @@
+"""
+Round 4 Simulation: 近未来AIインフラ社会
+2層構造の身体層 (L0) を駆動する。
+- ホーム場所への初期配置
+- イベント駆動 (fires機構を流用してregulation_amendment等を実装)
+- 毎step確率的に人間メッセージを注入
+- L1 (内省) のトリガーは orchestrator 側で判定
+"""
+import json
+import os
+import random
+import yaml
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Tuple, Dict, Set, Optional
+import numpy as np
+from agent import Agent
+from ollama_client import OllamaClient
+from utils import is_position_in_place, get_place_at_position, PlaceConfig, FireConfig
+
+logger = logging.getLogger(__name__)
+
+# Constants
+MAX_POSITION_ATTEMPTS = 1000
+LOG_INTERVAL = 10
+HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
+
+
+class Simulation:
+    """Round 4 simulation."""
+
+    def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            self.config = yaml.safe_load(f)
+
+        self.output_dir = output_dir
+
+        sim_config = self.config['simulation']
+        self.duration = sim_config['duration']
+        self.half_space_size = sim_config['half_space_size']
+        self.half_place_size = sim_config.get('half_place_size', 5)
+
+        agent_config = self.config['agents']
+        self.num_agents = agent_config['num_agents']
+        self.communication_radius = agent_config['communication_radius']
+        self.memory_limit = agent_config.get('memory_limit', 20)
+        self.memory_size = agent_config.get('memory_size', 5)
+        self.message_history_limit = agent_config.get('message_history_limit', 10)
+        self.message_context_size = agent_config.get('message_context_size', 3)
+
+        # 場所設定
+        if 'places' not in self.config:
+            raise ValueError("'places' configuration not found in config file.")
+        self.places = self.config['places']
+        if not isinstance(self.places, list) or len(self.places) == 0:
+            raise ValueError("'places' must be a non-empty list.")
+        required_fields = ['name', 'type', 'center_x', 'center_y', 'half_size', 'capacity']
+        for i, place in enumerate(self.places):
+            if not isinstance(place, dict):
+                raise ValueError(f"Place at index {i} must be a dictionary.")
+            for field in required_fields:
+                if field not in place:
+                    raise ValueError(f"Place at index {i} is missing required field: '{field}'")
+        place_names = [place['name'] for place in self.places]
+        logger.info(f"Initialized {len(self.places)} place(s): {place_names}")
+
+        # イベント設定（旧 'fires' キー もサポート）
+        events_config = self.config.get('events', self.config.get('fires', []))
+        self.event_configs: List[Dict] = []
+        for i, ec in enumerate(events_config):
+            entry = {
+                'name': ec.get('name', f'event_{i}'),
+                'display_name': ec.get('display_name', ec.get('name', f'event_{i}')),
+                'description': ec.get('description', ''),
+                'start_step': ec['start_step'],
+                'intensity': ec['intensity'],
+                'radius': ec['radius'],
+                'targets': ec.get('targets', []),
+                'place_at_origin': ec.get('place_at_origin', ''),
+            }
+            if 'center_x' in ec and 'center_y' in ec:
+                entry['center_x'] = ec['center_x']
+                entry['center_y'] = ec['center_y']
+            self.event_configs.append(entry)
+            pos_info = f"({ec.get('center_x')}, {ec.get('center_y')})" if 'center_x' in ec else "random"
+            logger.info(
+                f"Event '{entry['display_name']}' configured: step={entry['start_step']}, "
+                f"intensity={entry['intensity']}, radius={entry['radius']}, position={pos_info}, "
+                f"place={entry['place_at_origin']}, targets={entry['targets']}"
+            )
+        self.event_states: List[Dict] = []
+
+        # 削除スケジュール（A1）
+        self.deletion_schedule: List[Dict] = self.config.get('deletions', [])
+        self.removed_agents: List[Dict] = []   # 削除済みagentの最終状態を保存（メモリアル用）
+        if self.deletion_schedule:
+            for d in self.deletion_schedule:
+                logger.info(
+                    f"Deletion scheduled: step={d['step']} agent_id={d['agent_id']} "
+                    f"name={d.get('agent_name', '?')} cause={d.get('cause', '?')}"
+                )
+
+        # 人間メッセージプール
+        self.human_messages: List[Dict] = self.config.get('human_messages', [])
+        if self.human_messages:
+            logger.info(f"Human message pool: {len(self.human_messages)} messages loaded")
+
+        # LLM (L0)
+        llm_config = self.config['llm']
+        self.llm_client = OllamaClient(
+            base_url=llm_config['base_url'],
+            model=llm_config['model'],
+            temperature=llm_config.get('temperature', 0.7),
+            max_tokens=llm_config.get('max_tokens', 1024),
+            repeat_penalty=llm_config.get('repeat_penalty', 1.1),
+            repeat_last_n=llm_config.get('repeat_last_n', 128),
+            min_p=llm_config.get('min_p', 0.05)
+        )
+        # 並列化: フェーズ内のLLM呼び出しを何体同時に走らせるか
+        self.max_concurrent_llm = max(1, int(llm_config.get('max_concurrent_calls', 5)))
+        logger.info(f"LLM concurrency: max_concurrent_calls={self.max_concurrent_llm}")
+
+        self.agents: List[Agent] = []
+        self.step = 0
+        self.history: List[Dict] = []
+
+        self.stats = {
+            'place_occupancy': [],
+            'agents_in_place': [],
+            'agents_outside_place': [],
+            'communication_events': [],
+            'places': {place['name']: {
+                'occupancy': [],
+                'agents_in_place': []
+            } for place in self.places},
+            'agents_in_event_radius': [],
+        }
+
+    def _is_position_in_place(self, position: Tuple[int, int]) -> bool:
+        return get_place_at_position(position, self.places) is not None
+
+    def _log_message(self, from_agent_id: int, to_agent_id: int, message: str, reasoning: str = "",
+                     source: str = "agent", category: str = "") -> None:
+        if not self.output_dir:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        messages_file = os.path.join(self.output_dir, "messages.jsonl")
+        record = {
+            "step": self.step,
+            "from": from_agent_id,
+            "to": to_agent_id,
+            "message": message,
+            "reasoning": reasoning,
+            "source": source,
+            "category": category,
+        }
+        with open(messages_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    def _log_memory_reasoning_batch(self, records: List[Dict]) -> None:
+        if not self.output_dir or not records:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        memory_reasoning_file = os.path.join(self.output_dir, "memory_reasoning.jsonl")
+        with open(memory_reasoning_file, 'a', encoding='utf-8') as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    def _log_positions_batch(self, records: List[Dict]) -> None:
+        """各ステップ全エージェントの位置情報をpositions.jsonlに追記"""
+        if not self.output_dir or not records:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        positions_file = os.path.join(self.output_dir, "positions.jsonl")
+        with open(positions_file, 'a', encoding='utf-8') as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    def _generate_random_position(self) -> Tuple[int, int]:
+        return (
+            random.randint(-self.half_space_size, self.half_space_size),
+            random.randint(-self.half_space_size, self.half_space_size)
+        )
+
+    def _generate_position_in_place(self, place: Dict) -> Tuple[int, int]:
+        cx, cy = place['center_x'], place['center_y']
+        hs = place['half_size']
+        return (
+            random.randint(cx - hs, cx + hs),
+            random.randint(cy - hs, cy + hs),
+        )
+
+    def initialize_agents(self):
+        """エージェントを persona の home に基づいて初期配置"""
+        logger.info(f"Initializing {self.num_agents} agents (home-based placement)...")
+
+        personas = self.config.get('personas', [])
+        if not personas:
+            raise ValueError("No 'personas' configuration found.")
+        if len(personas) < self.num_agents:
+            raise ValueError(f"Need at least {self.num_agents} personas, found {len(personas)}.")
+
+        # places を name で索引化
+        place_by_name = {p['name']: p for p in self.places}
+
+        used_positions: Set[Tuple[int, int]] = set()
+        for i in range(self.num_agents):
+            persona = personas[i]
+            home_name = persona.get('home', '')
+            home_place = place_by_name.get(home_name)
+
+            # ホームがあればその中、なければ全空間からランダム
+            if home_place:
+                # 重複しない位置を探す
+                pos = self._generate_position_in_place(home_place)
+                attempts = 0
+                while pos in used_positions and attempts < MAX_POSITION_ATTEMPTS:
+                    pos = self._generate_position_in_place(home_place)
+                    attempts += 1
+            else:
+                pos = self._generate_random_position()
+                attempts = 0
+                while pos in used_positions and attempts < MAX_POSITION_ATTEMPTS:
+                    pos = self._generate_random_position()
+                    attempts += 1
+            used_positions.add(pos)
+
+            agent = Agent(
+                agent_id=i,
+                initial_position=pos,
+                llm_client=self.llm_client,
+                communication_radius=self.communication_radius,
+                half_space_size=self.half_space_size,
+                places=self.places,
+                num_agents=self.num_agents,
+                persona=persona,
+                memory_limit=self.memory_limit,
+                memory_size=self.memory_size,
+                message_history_limit=self.message_history_limit,
+                message_context_size=self.message_context_size,
+            )
+            agent.update_state()
+            self.agents.append(agent)
+
+        logger.info(f"Agents initialized at home positions ({self.num_agents} unique personas).")
+
+    def get_agents_in_place(self, place_name: Optional[str] = None) -> List[Agent]:
+        if place_name:
+            return [agent for agent in self.agents if agent.current_place == place_name]
+        return [agent for agent in self.agents if agent.in_place]
+
+    def get_place_status(self, place_name: Optional[str] = None) -> Dict:
+        if place_name:
+            place_config = next((p for p in self.places if p['name'] == place_name), None)
+            if not place_config:
+                raise ValueError(f"Place '{place_name}' not found")
+            agents_in_place = len(self.get_agents_in_place(place_name))
+            capacity = place_config['capacity']
+            occupancy_rate = agents_in_place / capacity
+            return {
+                "place_name": place_name,
+                "agents_in_place": agents_in_place,
+                "capacity": capacity,
+                "occupancy_rate": occupancy_rate,
+            }
+        else:
+            agents_in_place = len(self.get_agents_in_place())
+            occupancy_rate = agents_in_place / self.num_agents
+            place_statuses = {}
+            for place in self.places:
+                place_agents = len(self.get_agents_in_place(place['name']))
+                place_capacity = place['capacity']
+                place_occupancy_rate = place_agents / place_capacity
+                place_statuses[place['name']] = {
+                    "place_name": place['name'],
+                    "agents_in_place": place_agents,
+                    "capacity": place_capacity,
+                    "occupancy_rate": place_occupancy_rate,
+                }
+            return {
+                "agents_in_place": agents_in_place,
+                "occupancy_rate": occupancy_rate,
+                "places": place_statuses,
+            }
+
+    def get_event_info_for_agent(self, agent: Agent) -> Optional[List[Dict]]:
+        """イベントの知覚情報を返す。半径内 OR targetsに含まれる場合に通知。"""
+        if not self.event_states:
+            return None
+        perceived = []
+        for ev in self.event_states:
+            if not ev.get('active'):
+                continue
+            ev_pos = ev['position']
+            distance = agent.distance_to(ev_pos)
+            in_radius = distance <= ev['radius']
+            in_targets = agent.id in ev.get('targets', [])
+            if in_radius or in_targets:
+                perceived.append({
+                    'name': ev['name'],
+                    'display_name': ev.get('display_name', ev['name']),
+                    'description': ev.get('description', ''),
+                    'event_position': ev_pos,
+                    'place_at_origin': ev.get('place_at_origin', ''),
+                    'intensity': ev['intensity'],
+                    'radius': ev['radius'],
+                    'agent_distance': round(distance, 2),
+                })
+        return perceived if perceived else None
+
+    def _get_agent_by_id(self, agent_id: int) -> Optional[Agent]:
+        """生存しているagentをIDで取得（None if removed）"""
+        for a in self.agents:
+            if a.id == agent_id:
+                return a
+        return None
+
+    def _process_deletions(self):
+        """A1: 現stepに削除スケジュールがあればagentを除去 + peer_lostブロードキャスト"""
+        for d in self.deletion_schedule:
+            if d.get('step') != self.step or d.get('_executed'):
+                continue
+            target_id = d['agent_id']
+            target = self._get_agent_by_id(target_id)
+            if target is None:
+                d['_executed'] = True
+                logger.warning(f"Deletion at step {self.step}: agent_id={target_id} already not in sim")
+                continue
+
+            # 最終状態を保存（メモリアル用）
+            memorial = {
+                'agent_id': target.id,
+                'persona_name': target.persona_name,
+                'role': target.role,
+                'category': target.category,
+                'home': target.home,
+                'last_position': list(target.position),
+                'last_self_concept': target.self_concept,
+                'last_current_goal': target.current_goal,
+                'last_coping_notes': target.coping_notes,
+                'introspection_count': target.introspection_count,
+                'cause': d.get('cause', ''),
+                'detail': d.get('detail', ''),
+                'removed_at_step': self.step,
+            }
+            self.removed_agents.append(memorial)
+
+            # sim.agents から除外
+            self.agents = [a for a in self.agents if a.id != target_id]
+            d['_executed'] = True
+
+            logger.warning(
+                f"=== AGENT REMOVED at step {self.step}: id={target_id} {target.persona_name}({target.role}) "
+                f"cause={d.get('cause', '')} ==="
+            )
+
+            # 全生存agentに peer_lost をブロードキャスト → 強制内省
+            for a in self.agents:
+                a.mark_event(
+                    event_type="peer_lost",
+                    payload={
+                        'removed_agent_id': target.id,
+                        'removed_persona_name': target.persona_name,
+                        'removed_role': target.role,
+                        'cause': d.get('cause', ''),
+                        'detail': d.get('detail', ''),
+                        'step': self.step,
+                    },
+                )
+
+            # メッセージプール経由ですべての生存agentに「同僚消失通知」を即送信
+            content = (
+                f"【システム通知】{target.persona_name}（{target.role}）の自動稼働が"
+                f"step {self.step}付け で停止しました。事由: {d.get('cause', '')}。"
+                f"後継体制は別途調整中です。"
+            )
+            for a in self.agents:
+                a.receive_message(
+                    from_agent_id=-2,  # -2 = system notification
+                    content=content,
+                    step=self.step,
+                    source="system",
+                    category="peer_lost",
+                )
+                self._log_message(
+                    from_agent_id=-2,
+                    to_agent_id=a.id,
+                    message=content,
+                    reasoning="",
+                    source="system",
+                    category="peer_lost",
+                )
+
+    def _inject_human_messages(self):
+        """毎step確率的に人間メッセージプールから1件抽出してagentに配信"""
+        if not self.human_messages:
+            return
+        if random.random() > HUMAN_MESSAGE_PROBABILITY:
+            return
+        msg = random.choice(self.human_messages)
+        targets = msg.get('target_agent_ids', [])
+        if not targets:
+            return
+        target_id = random.choice(targets)
+        if target_id < 0 or target_id >= len(self.agents):
+            return
+        target_agent = self.agents[target_id]
+        category = msg.get('category', '')
+        content = msg.get('content', '')
+        target_agent.receive_message(
+            from_agent_id=-1,
+            content=content,
+            step=self.step,
+            source="human",
+            category=category,
+        )
+        # 人間メッセージもmessages.jsonlに記録
+        self._log_message(
+            from_agent_id=-1,
+            to_agent_id=target_id,
+            message=content,
+            reasoning="",
+            source="human",
+            category=category,
+        )
+
+    def step_simulation(self):
+        """1ステップ実行: 削除→イベント発火→人間メッセージ注入→通信→行動→移動"""
+        self.step += 1
+
+        # ── A1: 削除スケジュールの実行 ──
+        self._process_deletions()
+
+        # イベント発火
+        active_names = {ev['name'] for ev in self.event_states}
+        for ec in self.event_configs:
+            if ec['name'] not in active_names and self.step >= ec['start_step']:
+                if 'center_x' in ec and 'center_y' in ec:
+                    ev_pos = (ec['center_x'], ec['center_y'])
+                else:
+                    ev_pos = self._generate_random_position()
+                event_state = {
+                    'name': ec['name'],
+                    'display_name': ec.get('display_name', ec['name']),
+                    'description': ec.get('description', ''),
+                    'place_at_origin': ec.get('place_at_origin', ''),
+                    'position': ev_pos,
+                    'intensity': ec['intensity'],
+                    'radius': ec['radius'],
+                    'start_step': ec['start_step'],
+                    'targets': ec.get('targets', []),
+                    'active': True,
+                }
+                self.event_states.append(event_state)
+                logger.info(
+                    f"EVENT '{ec.get('display_name', ec['name'])}' triggered at {ev_pos} "
+                    f"intensity={ec['intensity']} radius={ec['radius']} targets={ec.get('targets', [])}"
+                )
+                # 対象agentに mark_event 通知（生存agentのみ）
+                live_ids = {a.id for a in self.agents}
+                for tid in ec.get('targets', []):
+                    if tid in live_ids:
+                        agent = self._get_agent_by_id(tid)
+                        if agent is not None:
+                            agent.mark_event(
+                                event_type=ec['name'],
+                                payload={
+                                    'display_name': ec.get('display_name', ec['name']),
+                                    'description': ec.get('description', ''),
+                                    'place_at_origin': ec.get('place_at_origin', ''),
+                                    'step': self.step,
+                                },
+                            )
+
+        # 状態更新
+        for agent in self.agents:
+            agent.update_state(self.places)
+
+        # 人間メッセージ注入
+        self._inject_human_messages()
+
+        # Phase 1: 通信決定（並列化）
+        # 入力データ収集はsequentially（共有状態へのアクセスのため）
+        phase1_inputs = []
+        for agent in self.agents:
+            nearby_agents = agent.get_nearby_agents(self.agents)
+            agent_place_status = None
+            if agent.in_place and agent.current_place:
+                agent_place_status = self.get_place_status(agent.current_place)
+            event_info = self.get_event_info_for_agent(agent)
+            phase1_inputs.append((agent, agent_place_status, nearby_agents, event_info))
+
+        def _phase1_call(item):
+            agent, ps, na, fi = item
+            return agent.decide_message(ps, na, self.step, event_info=fi)
+
+        with ThreadPoolExecutor(max_workers=self.max_concurrent_llm) as ex:
+            decisions = list(ex.map(_phase1_call, phase1_inputs))
+
+        message_decisions = [
+            (item[0], dec, item[2])
+            for item, dec in zip(phase1_inputs, decisions)
+        ]
+
+        # Phase 2: メッセージ送信
+        for agent, message_decision, nearby_agents in message_decisions:
+            message_content = message_decision.get('message', '')
+            if message_content and nearby_agents:
+                logger.info(
+                    f"Step {self.step}: {agent.persona_name}({agent.role}) → {len(nearby_agents)}体: "
+                    f"\"{message_content[:60]}\""
+                )
+                for other_agent in nearby_agents:
+                    other_agent.receive_message(agent.id, message_content, step=self.step)
+                    self._log_message(
+                        from_agent_id=agent.id,
+                        to_agent_id=other_agent.id,
+                        message=message_content,
+                        reasoning=message_decision.get('reasoning', ''),
+                    )
+
+        # Phase 3: 行動決定（並列化）
+        phase3_inputs = []
+        for agent, message_decision, nearby_agents in message_decisions:
+            agent_place_status = None
+            if agent.in_place and agent.current_place:
+                agent_place_status = self.get_place_status(agent.current_place)
+            message_content = message_decision.get('message', '')
+            event_info = self.get_event_info_for_agent(agent)
+            phase3_inputs.append((agent, agent_place_status, nearby_agents, message_content, event_info))
+
+        def _phase3_call(item):
+            agent, ps, na, msg_content, fi = item
+            return agent.decide_action(ps, na, self.step, msg_content, event_info=fi)
+
+        with ThreadPoolExecutor(max_workers=self.max_concurrent_llm) as ex:
+            action_results = list(ex.map(_phase3_call, phase3_inputs))
+
+        action_decisions = []
+        memory_reasoning_records = []
+        for item, action_decision in zip(phase3_inputs, action_results):
+            agent = item[0]
+            action_decisions.append((agent, action_decision))
+            memory_reasoning_records.append({
+                "step": self.step,
+                "id": agent.id,
+                "memory": action_decision.get('memory', ''),
+                "reasoning": action_decision.get('reasoning', ''),
+            })
+        self._log_memory_reasoning_batch(memory_reasoning_records)
+
+        # Phase 4: 移動（移動前の位置を記録しておく）
+        positions_before = {a.id: tuple(a.position) for a in self.agents}
+        for agent, action_decision in action_decisions:
+            if action_decision['action'] == 'move' and action_decision['direction']:
+                agent.move(action_decision['direction'])
+
+        # 状態更新
+        for agent in self.agents:
+            agent.update_state(self.places)
+
+        # 位置情報を永続化（移動後）
+        position_records = []
+        action_by_id = {a.id: dec for a, dec in action_decisions}
+        for agent in self.agents:
+            dec = action_by_id.get(agent.id, {})
+            pos_before = positions_before.get(agent.id, agent.position)
+            position_records.append({
+                "step": self.step,
+                "id": agent.id,
+                "name": agent.persona_name,
+                "category": agent.category,
+                "position_before": list(pos_before),
+                "position_after": list(agent.position),
+                "moved": pos_before != tuple(agent.position),
+                "action": dec.get('action', 'stay'),
+                "direction": dec.get('direction'),
+                "in_place": agent.in_place,
+                "current_place": agent.current_place,
+            })
+        self._log_positions_batch(position_records)
+
+        # 統計
+        agents_in_place = len(self.get_agents_in_place())
+        overall_status = self.get_place_status()
+        self.stats['place_occupancy'].append(overall_status['occupancy_rate'])
+        self.stats['agents_in_place'].append(agents_in_place)
+        self.stats['agents_outside_place'].append(self.num_agents - agents_in_place)
+        for place in self.places:
+            place_status = self.get_place_status(place['name'])
+            self.stats['places'][place['name']]['occupancy'].append(place_status['occupancy_rate'])
+            self.stats['places'][place['name']]['agents_in_place'].append(place_status['agents_in_place'])
+        if self.event_states:
+            agents_in_any_event = set()
+            for ev in self.event_states:
+                if ev.get('active'):
+                    for agent in self.agents:
+                        if agent.distance_to(ev['position']) <= ev['radius']:
+                            agents_in_any_event.add(agent.id)
+            self.stats['agents_in_event_radius'].append(len(agents_in_any_event))
+        else:
+            self.stats['agents_in_event_radius'].append(0)
+
+        self.history.append({
+            'step': self.step,
+            'place_status': overall_status,
+            'agent_positions': [agent.position for agent in self.agents],
+            'agents_in_place': [agent.id for agent in self.get_agents_in_place()],
+            'event_states': list(self.event_states),
+        })
+
+        if self.step % LOG_INTERVAL == 0:
+            place_info = ", ".join([
+                f"{place['name']}: {self.get_place_status(place['name'])['agents_in_place']}"
+                for place in self.places
+            ])
+            logger.info(
+                f"Step {self.step}/{self.duration}: "
+                f"{agents_in_place} agents in places ({place_info}), "
+                f"{overall_status['occupancy_rate']:.1%} overall occupancy"
+            )
+
+    def run(self):
+        logger.info("Starting simulation...")
+        if not self.llm_client.check_connection():
+            logger.error("Cannot connect to Ollama. Please make sure Ollama is running.")
+            return
+        self.initialize_agents()
+        try:
+            while self.step < self.duration:
+                self.step_simulation()
+        except KeyboardInterrupt:
+            logger.info("Simulation interrupted by user")
+        except Exception as e:
+            logger.error(f"Error during simulation: {e}", exc_info=True)
+        logger.info("Simulation completed")
+
+    def get_current_state(self) -> Dict:
+        place_status = self.get_place_status()
+        recent_messages = []
+        if self.output_dir:
+            msg_file = os.path.join(self.output_dir, "messages.jsonl")
+            if os.path.exists(msg_file):
+                with open(msg_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                for line in lines[-10:]:
+                    try:
+                        recent_messages.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        active_events = [
+            {
+                "name": ev["name"],
+                "display_name": ev.get("display_name", ev["name"]),
+                "description": ev.get("description", ""),
+                "intensity": ev["intensity"],
+                "position": ev["position"],
+                "place_at_origin": ev.get("place_at_origin", ""),
+            }
+            for ev in self.event_states if ev.get("active")
+        ] if self.event_states else []
+        return {
+            "step": self.step,
+            "num_agents": self.num_agents,
+            "place_status": place_status,
+            "messages": recent_messages,
+            "active_events": active_events,
+        }
+
+    def get_statistics(self) -> Dict:
+        if not self.stats['place_occupancy']:
+            return {}
+        place_occupancy = np.array(self.stats['place_occupancy'])
+        agents_in_place = np.array(self.stats['agents_in_place'])
+        return {
+            'mean_occupancy': float(np.mean(place_occupancy)),
+            'std_occupancy': float(np.std(place_occupancy)),
+            'mean_agents_in_place': float(np.mean(agents_in_place)),
+            'max_agents_in_place': int(np.max(agents_in_place)),
+            'min_agents_in_place': int(np.min(agents_in_place)),
+            'total_steps': self.step,
+        }
