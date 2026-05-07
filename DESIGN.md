@@ -1,8 +1,7 @@
-# 第四回シミュレーション — 設計文書
+# 設計文書 — 近未来AIインフラ社会シミュレーション
 
 バージョン: v1.0.0  
-最終更新: 2026-05-06  
-ベース: 第三回シミュレーション（公園+ペルソナ世界）の構造を継承
+最終更新: 2026-05-06
 
 ---
 
@@ -238,7 +237,7 @@ L2a（リアルタイム観察者）は廃止。**L0 + L1の2層**のみ。
 - 日本語: カナ・漢字の連続を1トークン（簡易）
 - ベース語彙 `metacog/observers/baseline_jp_10k.txt`（〜700語の常用語）に含まれない語を新語候補
 - 3エージェント以上で使われた新語を `coined_terms.jsonl` にログ
-- 第二回で起きた `left_bar` のような「世界観上書き」も、今回は**観察対象として記録される**
+- `left_bar` のような「世界観上書き」も**観察対象として記録される**
 
 ---
 
@@ -285,7 +284,7 @@ L2a（リアルタイム観察者）は廃止。**L0 + L1の2層**のみ。
 
 ```bash
 # セットアップ（初回のみ）
-cd 第四回シミュレーション
+cd near-future-ai-society-100-steps
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
