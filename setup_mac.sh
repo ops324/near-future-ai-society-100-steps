@@ -16,8 +16,13 @@ pip install --upgrade pip
 echo "Installing dependencies..."
 pip install -r requirements.txt
 
+# Playwright のブラウザ（4K HTML レンダラ用）
+echo "Installing Playwright chromium..."
+playwright install chromium
+
 echo ""
 echo "Setup complete!"
+echo "（別途: Ollama 起動と 'ollama pull qwen2.5:14b'、IPAGothic フォント導入が必要）"
 echo ""
 echo "To activate the virtual environment, run:"
 echo "  source venv/bin/activate"

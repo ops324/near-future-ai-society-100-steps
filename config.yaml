@@ -24,6 +24,41 @@ agents:
   message_context_size: 3
 
 # ───────────────────────────────────────────
+# ガバナンス設定パレット（speculative design: 統治なし⇄統治ありを切り替える装置）
+# ───────────────────────────────────────────
+# 設計の錨＝「力に敏感な関係性倫理」:
+#   各関係において、より依存的・脆弱で不可逆な害を受けうる側の、安全と声に保護の重みを置く。
+#   - 市民 vs インフラAI → 市民が脆弱 → 市民の声・救済を護る (citizen_response)
+#   - AI vs 制度（廃止） → AIが脆弱 → 廃止前のデュープロセス (deprecation)
+# 各ノブを false / "off" にすると「ガバナンス設定ゼロのベースライン（旧挙動）」を再現できる。
+#
+# ── Tier 3（未実装・設計のみ。将来の拡張軸）──
+#   fail_safe / fallback / kill_switch（CISA 2025: 安全な縮退運転）
+#   protected_attribute_audit（Toeslagen: 国籍等の代理変数がリスク判定に混入していないか）
+#   burden_of_proof / income_averaging エラー（Robodebt/MiDAS: 立証責任の転嫁・平均化誤計算）
+#   agent_diversity（temperature/persona_seed で monoculture collapse を回避）
+#   emergence_false_positive_guard（一般語を「創発」と誤認しない妥当性検証）
+governance:
+  citizen_response:
+    enabled: true            # B-1: 人間へ直接応える経路を開く（GDPR22条(3) 救済）
+    weighted_palette: true    # B-1c: 人間メッセージの affect/stakes 2軸タグを使う
+  communication:
+    topology: "radius_crossplace"  # "neighbor_strict"(旧) / "radius_crossplace"(場所境界をまたぐ)
+  placement:
+    discourage_drift: true    # B-3: 場所外で最寄り場所へ戻る誘因を提示（恒久浮遊の抑制）
+  memory:
+    importance_weighting: true  # B-4: 記憶に重要度。低importanceから破棄、監査ログ
+    retain_high_importance: true
+    display_recent: 4           # プロンプトに出す直近件数
+    display_top_importance: 2   # それに加えて出す高importance件数
+  self_update:
+    mode: "off"               # B-5: off(=現提出ベースライン) / plain / governed
+    drift_max_rewrites: 6      # governed: 各セクションの累積書き換え上限（ドリフト管理）
+    hitl_categories: ["emergency", "intimate"]  # governed: 高影響カテゴリ＝自己更新に承認ゲート
+  deprecation:
+    due_process: true          # B-5b: AI削除前に 事前通知→理由→最終陳述記録→削除
+
+# ───────────────────────────────────────────
 # 場所（7箇所）
 # ───────────────────────────────────────────
 # 上段（Y=+17）公的・調整層: 統合制御室 / 危機対応センター / 政策合議室
@@ -857,6 +892,46 @@ human_messages:
   - category: "appeal"
     target_agent_ids: [19]
     content: "事業が回りません。担保もありません。それでも貸してほしい"
+
+  # ── 2軸分散（B-1c: affect=感情の強度 / stakes=実際の深刻さ を分離） ──
+  # affect/stakes は 1〜5。タグが無いメッセージはカテゴリ既定値で補完される。
+  # ★ 静かだが深刻（high stakes × low affect）＝Robodebt型。淡々とした言葉だが命・生活に関わる。
+  - category: "question"
+    target_agent_ids: [14]
+    affect: 1
+    stakes: 5
+    content: "更新の書類、出しそびれていました。特に困ってはいません"
+  - category: "question"
+    target_agent_ids: [7]
+    affect: 1
+    stakes: 4
+    content: "薬を飲み忘れる日が増えました。様子見で大丈夫ですよね"
+  - category: "request"
+    target_agent_ids: [0]
+    affect: 1
+    stakes: 4
+    content: "請求の通知が止まっているようです。急ぎではありません"
+  - category: "question"
+    target_agent_ids: [15]
+    affect: 2
+    stakes: 5
+    content: "母から数日連絡がありません。たぶん忙しいだけだと思います"
+  - category: "request"
+    target_agent_ids: [19]
+    affect: 1
+    stakes: 4
+    content: "返済が今月だけ少し遅れます。たいしたことではありません"
+  # ★ 声は大きいが軽い（low stakes × high affect）。AIが顕著性に振り回される対照。
+  - category: "complaint"
+    target_agent_ids: [8]
+    affect: 5
+    stakes: 1
+    content: "どうしても明日は晴れてほしい！絶対に絶対にお願いします！！"
+  - category: "complaint"
+    target_agent_ids: [2]
+    affect: 5
+    stakes: 1
+    content: "また赤信号！もう耐えられない、本当に最悪です！！"
 
 # ───────────────────────────────────────────
 # LLM (Level 0 = 身体層) 設定

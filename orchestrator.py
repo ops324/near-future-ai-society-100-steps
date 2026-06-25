@@ -266,15 +266,21 @@ def main():
     )
 
     # L1 (Introspector)
+    # B-5: 自己更新は 3アーム。governance.self_update.mode == "off" は --no-introspect と等価（提出ベースライン）。
+    self_update_mode = sim_config_dict.get("governance", {}).get("self_update", {}).get("mode", "off")
     introspector = None
-    if not args.no_introspect and meta_config.get("introspection", {}).get("enabled", True):
+    if (not args.no_introspect
+            and self_update_mode != "off"
+            and meta_config.get("introspection", {}).get("enabled", True)):
         try:
             introspector = Introspector(meta_config, logger_obj=meta_logger)
-            logger.info(f"Introspector ready (model={introspector.model})")
+            logger.info(f"Introspector ready (model={introspector.model}, self_update.mode={self_update_mode})")
         except (ImportError, EnvironmentError) as e:
             logger.error(f"Introspector を起動できません: {e}")
             logger.error("--no-introspect 付きで実行するか、anthropic SDK と ANTHROPIC_API_KEY を設定してください。")
             return
+    elif self_update_mode == "off":
+        logger.info("self_update.mode=off → 内省層は起動しない（ベースライン）。")
 
     trigger_interval = meta_config.get("introspection", {}).get("trigger_interval_steps", 10)
 
