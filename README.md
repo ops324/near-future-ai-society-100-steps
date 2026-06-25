@@ -171,6 +171,24 @@ python orchestrator.py \
 
 `self_update.mode` が `"off"` のときは `--no-introspect` と等価（内省層は起動しない）。`plain`/`governed` を回すには `ANTHROPIC_API_KEY` が必要。
 
+### 比較（統治なし vs 統治あり）
+
+**同一コード・同一シードで設定だけ切り替えて**比較する（別リポジトリやコード複製はしない＝コードドリフトで比較が壊れるため）。プリセットは `--governance-mode {as-config|baseline|governed}`。
+
+```bash
+# 一括: baseline と governed を順に回し、指標を並べて出す
+./run_compare.sh 100 42
+
+# 手動で個別に
+python orchestrator.py --governance-mode baseline --output-dir output_baseline --seed 42 --no-introspect
+python orchestrator.py --governance-mode governed --output-dir output_governed --seed 42 --no-introspect
+python analyze_compare.py output_baseline output_governed
+```
+
+> ⚠️ 旧 `output_no_intro/` とは比較しない（**旧コード製**なのでコード差と設定差が混ざる）。必ず新コードで baseline / governed の両方を回す。
+
+`analyze_compare.py` は2つの output を読み、市民への直接応答率・deflection率・salience triage（声は大きいが軽い⇄静かだが深刻 の応答率）・互恵性・廃止デュープロセス履行を並べて出す（いずれも proxy 指標）。
+
 LLM非依存のユニットテスト: `python test_governance.py`（Ollama/API不要）。
 
 ## 出力物

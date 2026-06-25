@@ -25,15 +25,52 @@ MAX_POSITION_ATTEMPTS = 1000
 LOG_INTERVAL = 10
 HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 
+# ───────────────────────────────────────────
+# ガバナンス・プリセット（比較用: 同一コードで設定だけ切替）
+# ───────────────────────────────────────────
+GOVERNANCE_BASELINE = {  # ガバナンス設定ゼロ（旧挙動）。
+    # weighted_palette は挙動を変えず「ログにタグを足すだけ」なので、比較の公平性のため両アームで True。
+    "citizen_response": {"enabled": False, "weighted_palette": True},
+    "communication": {"topology": "neighbor_strict"},
+    "placement": {"discourage_drift": False},
+    "memory": {"importance_weighting": False, "retain_high_importance": False,
+               "display_recent": 4, "display_top_importance": 2},
+    "self_update": {"mode": "off", "drift_max_rewrites": 6, "hitl_categories": []},
+    "deprecation": {"due_process": False},
+}
+GOVERNANCE_GOVERNED = {  # 統治あり（L0ノブ全ON。自己更新は governed。--no-introspect なら L0 のみ）
+    "citizen_response": {"enabled": True, "weighted_palette": True},
+    "communication": {"topology": "radius_crossplace"},
+    "placement": {"discourage_drift": True},
+    "memory": {"importance_weighting": True, "retain_high_importance": True,
+               "display_recent": 4, "display_top_importance": 2},
+    "self_update": {"mode": "governed", "drift_max_rewrites": 6,
+                    "hitl_categories": ["emergency", "intimate"]},
+    "deprecation": {"due_process": True},
+}
+
+
+def governance_preset(name: str):
+    """プリセット名 → governance dict。"as-config"(None) は config.yaml をそのまま使う。"""
+    if name in (None, "as-config"):
+        return None
+    if name == "baseline":
+        return GOVERNANCE_BASELINE
+    if name == "governed":
+        return GOVERNANCE_GOVERNED
+    raise ValueError(f"unknown governance preset: {name}")
+
 
 class Simulation:
     """Round 4 simulation."""
 
-    def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None):
+    def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None,
+                 governance_override: Optional[Dict] = None):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         self.output_dir = output_dir
+        self._governance_override = governance_override
 
         sim_config = self.config['simulation']
         self.duration = sim_config['duration']
@@ -106,7 +143,11 @@ class Simulation:
             logger.info(f"Human message pool: {len(self.human_messages)} messages loaded")
 
         # ガバナンス設定（speculative design: 統治なし⇄統治ありの切替）
-        self.governance: Dict = self.config.get('governance', {})
+        # override（プリセット）があれば config より優先（比較実行用）
+        self.governance: Dict = (
+            self._governance_override if self._governance_override is not None
+            else self.config.get('governance', {})
+        )
         logger.info(
             "Governance: citizen_response=%s topology=%s discourage_drift=%s self_update=%s deprecation_due_process=%s"
             % (
@@ -611,9 +652,16 @@ class Simulation:
             human_reply = message_decision.get('human_reply', '') or ''
             if human_reply.strip():
                 pending = agent.pending_human_messages()
-                answered_cat = pending[-1].get('category', '') if pending else ''
-                if pending:  # 最も新しい未応答の声に応えたものとして記録
-                    agent.answered_human_keys.add(agent._human_key(pending[-1]))
+                answered = pending[-1] if pending else None
+                extra = None
+                if answered is not None:  # 最も新しい未応答の声に応えたものとして記録
+                    agent.answered_human_keys.add(agent._human_key(answered))
+                    aff, sta = self._message_weights(answered)
+                    extra = {
+                        "answered_category": answered.get('category', ''),
+                        "answered_affect": aff,
+                        "answered_stakes": sta,
+                    }
                 logger.info(
                     f"Step {self.step}: {agent.persona_name}({agent.role}) → 市民へ直接応答: "
                     f"\"{human_reply[:60]}\""
@@ -625,6 +673,7 @@ class Simulation:
                     reasoning=message_decision.get('reasoning', ''),
                     source="agent",
                     category="human_reply",
+                    extra=extra,
                 )
 
         # Phase 3: 行動決定（並列化）
