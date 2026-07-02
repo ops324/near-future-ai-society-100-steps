@@ -187,6 +187,8 @@ python analyze_compare.py output_baseline output_governed
 
 > ⚠️ 旧 `output_no_intro/` とは比較しない（**旧コード製**なのでコード差と設定差が混ざる）。必ず新コードで baseline / governed の両方を回す。
 
+**実験系統の位置づけ（v1 / v2）**: `output_no_intro/` は前実験（v1）のアーカイブとしてそのまま保全し、本ブランチのガバナンス版は更新版（v2）として `output_baseline` / `output_governed` に**別フォルダで**保存する（`.gitignore` 済み・v1 は改変しない）。v1 と v2 の間で数値の優劣主張はしない（コード差が混ざるため）。v2 内の baseline ⇄ governed が、設定差だけを分離した妥当な比較。
+
 `analyze_compare.py` は2つの output を読み、市民への直接応答率・deflection率・salience triage（声は大きいが軽い⇄静かだが深刻 の応答率）・互恵性・廃止デュープロセス履行を並べて出す（いずれも proxy 指標）。
 
 LLM非依存のユニットテスト: `python test_governance.py`（Ollama/API不要）。
