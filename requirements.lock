@@ -1,0 +1,44 @@
+# 実測ロック（再現用）: setup_mac.sh の venv に実際にインストールされた版。
+# 疎な requirements.txt（>=指定）に対し、この lock は動作確認済みの固定版を記録する。
+# 生成: ./venv/bin/pip freeze （Python 3.9.6 / macOS）
+annotated-types==0.7.0
+anthropic==0.99.0
+anyio==4.12.1
+beautifulsoup4==4.15.0
+certifi==2026.4.22
+charset-normalizer==3.4.7
+contourpy==1.3.0
+cycler==0.12.1
+distro==1.9.0
+docstring_parser==0.18.0
+exceptiongroup==1.3.1
+fonttools==4.60.2
+greenlet==3.2.5
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.13
+importlib_resources==6.5.2
+Jinja2==3.1.6
+jiter==0.14.0
+kiwisolver==1.4.7
+MarkupSafe==3.0.3
+matplotlib==3.9.4
+numpy==2.0.2
+packaging==26.2
+pillow==11.3.0
+playwright==1.59.0
+pydantic==2.13.3
+pydantic_core==2.46.3
+pyee==13.0.1
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+requests==2.32.5
+six==1.17.0
+sniffio==1.3.1
+soupsieve==2.8.4
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+urllib3==2.6.3
+zipp==3.23.1

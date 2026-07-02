@@ -176,14 +176,19 @@ python orchestrator.py \
 **同一コード・同一シードで設定だけ切り替えて**比較する（別リポジトリやコード複製はしない＝コードドリフトで比較が壊れるため）。プリセットは `--governance-mode {as-config|baseline|governed}`。
 
 ```bash
-# 一括: baseline と governed を順に回し、指標を並べて出す
+# 一括: baseline と governed を順に回し、指標を並べて出す（既定は --no-viz で高速）
 ./run_compare.sh 100 42
 
+# フレーム/動画も出したい場合のみ
+WITH_VIZ=1 ./run_compare.sh 100 42
+
 # 手動で個別に
-python orchestrator.py --governance-mode baseline --output-dir output_baseline --seed 42 --no-introspect
-python orchestrator.py --governance-mode governed --output-dir output_governed --seed 42 --no-introspect
+python orchestrator.py --governance-mode baseline --output-dir output_baseline --seed 42 --no-introspect --no-viz
+python orchestrator.py --governance-mode governed --output-dir output_governed --seed 42 --no-introspect --no-viz
 python analyze_compare.py output_baseline output_governed
 ```
+
+> 💡 比較指標は `messages.jsonl` と監査 jsonl のみを読むため、`run_compare.sh` は既定で **`--no-viz`**（4Kフレーム/動画のレンダリングを省略）で回し、実行時間を大きく短縮する。再現用の固定版依存は `requirements.lock`（`pip freeze` 実測）を参照。
 
 > ⚠️ 旧 `output_no_intro/` とは比較しない（**旧コード製**なのでコード差と設定差が混ざる）。必ず新コードで baseline / governed の両方を回す。
 
