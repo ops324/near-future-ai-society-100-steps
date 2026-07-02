@@ -170,6 +170,23 @@ def test_citizen_prompt():
     check("無効時: human_reply フィールドなし", "human_reply" not in prompt2)
 
 
+# ── 6b. salience タグの保持（回帰: answered バケットが既定値に落ちない） ──
+def test_human_tag_retention():
+    # 静かだが深刻（affect低×stakes高）を明示タグ付きで受信 → 保持されること
+    a = make_agent(gov())
+    a.receive_message(-1, "書類を出しそびれました。困ってはいません",
+                      step=1, source="human", category="question", affect=1, stakes=5)
+    pend = a.pending_human_messages()
+    check("受信メッセージが affect/stakes 明示タグを保持",
+          bool(pend) and pend[-1].get("affect") == 1 and pend[-1].get("stakes") == 5)
+    # タグ未指定（weighted=False 相当）ではキーを付けない → 既定値フォールバックに委ねる
+    a2 = make_agent(gov())
+    a2.receive_message(-1, "x", step=1, source="human", category="question")
+    p2 = a2.pending_human_messages()
+    check("タグ未指定なら affect キーを付けない",
+          bool(p2) and "affect" not in p2[-1] and "stakes" not in p2[-1])
+
+
 def test_config_yaml():
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -188,6 +205,7 @@ if __name__ == "__main__":
     test_memory()
     test_self_update_governed()
     test_citizen_prompt()
+    test_human_tag_retention()
     test_config_yaml()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)

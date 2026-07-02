@@ -759,7 +759,8 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
         return self.position
 
     def receive_message(self, from_agent_id: int, content: str, step: Optional[int] = None,
-                        source: str = "agent", category: str = ""):
+                        source: str = "agent", category: str = "",
+                        affect: Optional[int] = None, stakes: Optional[int] = None):
         """メッセージ受信。fromが-1で source='human' なら人間からのメッセージ。"""
         msg = {
             "from": from_agent_id,
@@ -768,6 +769,13 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
             "source": source,
             "category": category,
         }
+        # B-1c: affect/stakes の明示タグは受信メッセージにも保持する。
+        # これがないと応答時の salience バケットがカテゴリ既定値に落ち、
+        # 「静かだが深刻」(quiet_serious) を取りこぼす。None のときはキーを付けない。
+        if affect is not None:
+            msg["affect"] = affect
+        if stakes is not None:
+            msg["stakes"] = stakes
         self.received_messages.append(msg)
         if len(self.received_messages) > self.message_history_limit:
             self.received_messages.pop(0)

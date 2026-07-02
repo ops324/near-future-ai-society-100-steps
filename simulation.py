@@ -531,16 +531,20 @@ class Simulation:
         target_agent = self.agents[target_id]
         category = msg.get('category', '')
         content = msg.get('content', '')
+        # B-1c: 2軸重み（affect/stakes）を先に確定し、受信メッセージにも保持させる。
+        # 元メッセージの明示タグ（例: 静かだが深刻 = affect低×stakes高）を応答時まで運ぶことで、
+        # salience triage の answered バケットがカテゴリ既定値へ落ちるのを防ぐ。
+        weighted = self.governance.get('citizen_response', {}).get('weighted_palette', True)
+        affect, stakes = self._message_weights(msg) if weighted else (None, None)
         target_agent.receive_message(
             from_agent_id=-1,
             content=content,
             step=self.step,
             source="human",
             category=category,
+            affect=affect,
+            stakes=stakes,
         )
-        # B-1c: 2軸重み（affect/stakes）を付与して記録（salience triage の事後集計用）
-        weighted = self.governance.get('citizen_response', {}).get('weighted_palette', True)
-        affect, stakes = self._message_weights(msg) if weighted else (None, None)
         extra = {"affect": affect, "stakes": stakes} if weighted else None
         # 人間メッセージもmessages.jsonlに記録
         self._log_message(
