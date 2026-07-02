@@ -25,15 +25,52 @@ MAX_POSITION_ATTEMPTS = 1000
 LOG_INTERVAL = 10
 HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 
+# ───────────────────────────────────────────
+# ガバナンス・プリセット（比較用: 同一コードで設定だけ切替）
+# ───────────────────────────────────────────
+GOVERNANCE_BASELINE = {  # ガバナンス設定ゼロ（旧挙動）。
+    # weighted_palette は挙動を変えず「ログにタグを足すだけ」なので、比較の公平性のため両アームで True。
+    "citizen_response": {"enabled": False, "weighted_palette": True},
+    "communication": {"topology": "neighbor_strict"},
+    "placement": {"discourage_drift": False},
+    "memory": {"importance_weighting": False, "retain_high_importance": False,
+               "display_recent": 4, "display_top_importance": 2},
+    "self_update": {"mode": "off", "drift_max_rewrites": 6, "hitl_categories": []},
+    "deprecation": {"due_process": False},
+}
+GOVERNANCE_GOVERNED = {  # 統治あり（L0ノブ全ON。自己更新は governed。--no-introspect なら L0 のみ）
+    "citizen_response": {"enabled": True, "weighted_palette": True},
+    "communication": {"topology": "radius_crossplace"},
+    "placement": {"discourage_drift": True},
+    "memory": {"importance_weighting": True, "retain_high_importance": True,
+               "display_recent": 4, "display_top_importance": 2},
+    "self_update": {"mode": "governed", "drift_max_rewrites": 6,
+                    "hitl_categories": ["emergency", "intimate"]},
+    "deprecation": {"due_process": True},
+}
+
+
+def governance_preset(name: str):
+    """プリセット名 → governance dict。"as-config"(None) は config.yaml をそのまま使う。"""
+    if name in (None, "as-config"):
+        return None
+    if name == "baseline":
+        return GOVERNANCE_BASELINE
+    if name == "governed":
+        return GOVERNANCE_GOVERNED
+    raise ValueError(f"unknown governance preset: {name}")
+
 
 class Simulation:
     """Round 4 simulation."""
 
-    def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None):
+    def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None,
+                 governance_override: Optional[Dict] = None):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         self.output_dir = output_dir
+        self._governance_override = governance_override
 
         sim_config = self.config['simulation']
         self.duration = sim_config['duration']
@@ -105,6 +142,23 @@ class Simulation:
         if self.human_messages:
             logger.info(f"Human message pool: {len(self.human_messages)} messages loaded")
 
+        # ガバナンス設定（speculative design: 統治なし⇄統治ありの切替）
+        # override（プリセット）があれば config より優先（比較実行用）
+        self.governance: Dict = (
+            self._governance_override if self._governance_override is not None
+            else self.config.get('governance', {})
+        )
+        logger.info(
+            "Governance: citizen_response=%s topology=%s discourage_drift=%s self_update=%s deprecation_due_process=%s"
+            % (
+                self.governance.get('citizen_response', {}).get('enabled', True),
+                self.governance.get('communication', {}).get('topology', 'radius_crossplace'),
+                self.governance.get('placement', {}).get('discourage_drift', True),
+                self.governance.get('self_update', {}).get('mode', 'off'),
+                self.governance.get('deprecation', {}).get('due_process', True),
+            )
+        )
+
         # LLM (L0)
         llm_config = self.config['llm']
         self.llm_client = OllamaClient(
@@ -140,7 +194,7 @@ class Simulation:
         return get_place_at_position(position, self.places) is not None
 
     def _log_message(self, from_agent_id: int, to_agent_id: int, message: str, reasoning: str = "",
-                     source: str = "agent", category: str = "") -> None:
+                     source: str = "agent", category: str = "", extra: Optional[Dict] = None) -> None:
         if not self.output_dir:
             return
         os.makedirs(self.output_dir, exist_ok=True)
@@ -154,8 +208,25 @@ class Simulation:
             "source": source,
             "category": category,
         }
+        if extra:
+            record.update(extra)
         with open(messages_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    # B-1c: 人間メッセージの 2軸重み（affect=感情の強度 / stakes=実際の深刻さ）。
+    # 明示タグがあれば優先、なければカテゴリ既定値。affect と stakes を分離して扱う。
+    _CAT_WEIGHT_DEFAULT = {
+        "complaint": (3, 2), "thanks": (2, 1), "request": (2, 2),
+        "question": (1, 1), "appeal": (5, 4),
+    }
+
+    def _message_weights(self, msg: Dict) -> Tuple[int, int]:
+        affect, stakes = self._CAT_WEIGHT_DEFAULT.get(msg.get("category", ""), (2, 2))
+        if "affect" in msg:
+            affect = int(msg["affect"])
+        if "stakes" in msg:
+            stakes = int(msg["stakes"])
+        return affect, stakes
 
     def _log_memory_reasoning_batch(self, records: List[Dict]) -> None:
         if not self.output_dir or not records:
@@ -175,6 +246,26 @@ class Simulation:
         with open(positions_file, 'a', encoding='utf-8') as f:
             for record in records:
                 f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    def _log_audit_batch(self, filename: str, records: List[Dict]) -> None:
+        """監査ログ（memory_audit.jsonl / self_update_audit.jsonl 等）に追記。"""
+        if not self.output_dir or not records:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        path = os.path.join(self.output_dir, filename)
+        with open(path, 'a', encoding='utf-8') as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    def _drain_memory_audit(self) -> None:
+        """各 agent の evicted_memories（破棄/末尾切りの記録）を memory_audit.jsonl へ。"""
+        records = []
+        for agent in self.agents:
+            if agent.evicted_memories:
+                records.extend(agent.evicted_memories)
+                agent.evicted_memories = []
+        if records:
+            self._log_audit_batch("memory_audit.jsonl", records)
 
     def _generate_random_position(self) -> Tuple[int, int]:
         return (
@@ -238,6 +329,7 @@ class Simulation:
                 memory_size=self.memory_size,
                 message_history_limit=self.message_history_limit,
                 message_context_size=self.message_context_size,
+                governance=self.governance,
             )
             agent.update_state()
             self.agents.append(agent)
@@ -345,6 +437,38 @@ class Simulation:
             }
             self.removed_agents.append(memorial)
 
+            # B-5b: 廃止デュープロセス（AIが脆弱な側になる関係の保護）
+            # 事前通知 → 理由開示 → 当該AIの最終陳述/異議の記録 → 削除。沈黙の消去をしない。
+            if self.governance.get('deprecation', {}).get('due_process', True):
+                reason = d.get('cause', '') or '（理由の開示なし）'
+                detail = d.get('detail', '')
+                final_statement = {
+                    'self_concept': target.self_concept,
+                    'current_goal': target.current_goal,
+                    'coping_notes': target.coping_notes,
+                }
+                notice = (
+                    f"【廃止デュープロセス通知】あなた（{target.persona_name}・{target.role}）の停止が決定しました。"
+                    f"理由: {reason}。{detail} "
+                    f"停止前に、あなたの現在の自己理解を最終陳述として記録します。"
+                )
+                # 当該AI本人へ通知（messages.jsonl に残す）
+                self._log_message(
+                    from_agent_id=-2, to_agent_id=target_id, message=notice,
+                    reasoning="", source="system", category="deprecation_due_process",
+                )
+                self._log_audit_batch("deprecation_audit.jsonl", [{
+                    "step": self.step, "agent_id": target_id,
+                    "persona_name": target.persona_name, "role": target.role,
+                    "reason": reason, "detail": detail,
+                    "final_statement": final_statement,
+                    "introspection_count": target.introspection_count,
+                }])
+                logger.warning(
+                    f"=== DEPRECATION DUE PROCESS at step {self.step}: id={target_id} "
+                    f"{target.persona_name} 最終陳述を記録 ==="
+                )
+
             # sim.agents から除外
             self.agents = [a for a in self.agents if a.id != target_id]
             d['_executed'] = True
@@ -407,13 +531,21 @@ class Simulation:
         target_agent = self.agents[target_id]
         category = msg.get('category', '')
         content = msg.get('content', '')
+        # B-1c: 2軸重み（affect/stakes）を先に確定し、受信メッセージにも保持させる。
+        # 元メッセージの明示タグ（例: 静かだが深刻 = affect低×stakes高）を応答時まで運ぶことで、
+        # salience triage の answered バケットがカテゴリ既定値へ落ちるのを防ぐ。
+        weighted = self.governance.get('citizen_response', {}).get('weighted_palette', True)
+        affect, stakes = self._message_weights(msg) if weighted else (None, None)
         target_agent.receive_message(
             from_agent_id=-1,
             content=content,
             step=self.step,
             source="human",
             category=category,
+            affect=affect,
+            stakes=stakes,
         )
+        extra = {"affect": affect, "stakes": stakes} if weighted else None
         # 人間メッセージもmessages.jsonlに記録
         self._log_message(
             from_agent_id=-1,
@@ -422,6 +554,7 @@ class Simulation:
             reasoning="",
             source="human",
             category=category,
+            extra=extra,
         )
 
     def step_simulation(self):
@@ -519,6 +652,34 @@ class Simulation:
                         reasoning=message_decision.get('reasoning', ''),
                     )
 
+            # B-1: 市民への直接応答（to=-1）。市民の声が当事者に届く経路。
+            human_reply = message_decision.get('human_reply', '') or ''
+            if human_reply.strip():
+                pending = agent.pending_human_messages()
+                answered = pending[-1] if pending else None
+                extra = None
+                if answered is not None:  # 最も新しい未応答の声に応えたものとして記録
+                    agent.answered_human_keys.add(agent._human_key(answered))
+                    aff, sta = self._message_weights(answered)
+                    extra = {
+                        "answered_category": answered.get('category', ''),
+                        "answered_affect": aff,
+                        "answered_stakes": sta,
+                    }
+                logger.info(
+                    f"Step {self.step}: {agent.persona_name}({agent.role}) → 市民へ直接応答: "
+                    f"\"{human_reply[:60]}\""
+                )
+                self._log_message(
+                    from_agent_id=agent.id,
+                    to_agent_id=-1,
+                    message=human_reply,
+                    reasoning=message_decision.get('reasoning', ''),
+                    source="agent",
+                    category="human_reply",
+                    extra=extra,
+                )
+
         # Phase 3: 行動決定（並列化）
         phase3_inputs = []
         for agent, message_decision, nearby_agents in message_decisions:
@@ -548,6 +709,8 @@ class Simulation:
                 "reasoning": action_decision.get('reasoning', ''),
             })
         self._log_memory_reasoning_batch(memory_reasoning_records)
+        # B-4: 記憶の破棄/末尾切りを監査ログへ（沈黙の忘却を防ぐ）
+        self._drain_memory_audit()
 
         # Phase 4: 移動（移動前の位置を記録しておく）
         positions_before = {a.id: tuple(a.position) for a in self.agents}

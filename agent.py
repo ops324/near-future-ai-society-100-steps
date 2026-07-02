@@ -34,9 +34,28 @@ WORLD_DESCRIPTION_JA = (
 )
 
 
-class MessageDecision(TypedDict):
+class MessageDecision(TypedDict, total=False):
     message: str
     reasoning: str
+    human_reply: str   # B-1: 人間（市民）へ直接返す内容。空文字なら直接応答しない
+
+
+def _default_governance() -> Dict[str, Any]:
+    """governance 未指定時のデフォルト（config.yaml の既定と一致＝統治あり挙動）。"""
+    return {
+        "citizen_response": {"enabled": True, "weighted_palette": True},
+        "communication": {"topology": "radius_crossplace"},
+        "placement": {"discourage_drift": True},
+        "memory": {
+            "importance_weighting": True,
+            "retain_high_importance": True,
+            "display_recent": 4,
+            "display_top_importance": 2,
+        },
+        "self_update": {"mode": "off", "drift_max_rewrites": 6,
+                        "hitl_categories": ["emergency", "intimate"]},
+        "deprecation": {"due_process": True},
+    }
 
 
 class ActionDecision(TypedDict):
@@ -66,6 +85,7 @@ class Agent:
         max_self_concept_chars: int = 100,
         max_current_goal_chars: int = 50,
         max_coping_notes_chars: int = 500,
+        governance: Optional[Dict[str, Any]] = None,
     ):
         self.id = agent_id
         self.position = initial_position
@@ -104,11 +124,20 @@ class Agent:
         self.message_history_limit = message_history_limit
         self.message_context_size = message_context_size
 
+        # ガバナンス設定（force-by-weight 等は触らず、経路・保持・歯止めのみ制御）
+        self.governance: Dict[str, Any] = governance if governance is not None else _default_governance()
+
         # 状態
         self.in_place = False
         self.current_place: Optional[str] = None
-        self.memory: List[str] = []
+        # B-4: 記憶は重要度付き dict のリスト {"step", "text", "importance"}
+        self.memory: List[Dict[str, Any]] = []
         self.received_messages: List[Dict] = []
+        # 監査バッファ（simulation / introspector が drain して jsonl に書く）
+        self.evicted_memories: List[Dict[str, Any]] = []   # 破棄/末尾切りされた記憶
+        self.last_self_update_audit: Optional[Dict[str, Any]] = None  # 直近の自己更新の適用/ブロック結果
+        # B-1: 直接応答済みの人間メッセージのキー集合（二重応答の抑制・未応答の声の抽出）
+        self.answered_human_keys: set = set()
 
         # L1 トリガーキュー (orchestratorが消費)
         self.event_queue: List[Dict] = []
@@ -120,6 +149,11 @@ class Agent:
             "current_goal": -100,
             "coping_notes": -100,
         }
+        # B-5 governed: セクションごとの累積書き換え回数（ドリフト管理）と直前状態（ロールバック用）
+        self.rewrite_counts: Dict[str, int] = {
+            "self_concept": 0, "current_goal": 0, "coping_notes": 0,
+        }
+        self.prev_self_state: Optional[Dict[str, str]] = None
 
         # 統計
         self.steps_in_place = 0
@@ -137,18 +171,54 @@ class Agent:
         return math.sqrt(dx * dx + dy * dy)
 
     def get_nearby_agents(self, all_agents: List['Agent']) -> List['Agent']:
-        """同一エリア（同場所内 or 同じ屋外）かつ通信半径内のエージェントを返す"""
+        """通信できる相手を返す。
+        B-2 通信トポロジ設定:
+        - "neighbor_strict"(旧): 同一エリア（同場所内 or 同じ屋外）かつ通信半径内のみ
+        - "radius_crossplace": 通信半径内なら場所境界をまたいでも可（孤立・機関間ミュートの解消）
+        """
+        topology = self.governance.get("communication", {}).get("topology", "radius_crossplace")
         nearby = []
         for agent in all_agents:
-            if agent.id != self.id:
-                dist = self.distance_to(agent.position)
+            if agent.id == self.id:
+                continue
+            dist = self.distance_to(agent.position)
+            if dist > self.communication_radius:
+                continue
+            if topology == "neighbor_strict":
                 same_area = (
                     (not self.in_place and not agent.in_place) or
                     (self.in_place and agent.in_place and self.current_place == agent.current_place)
                 )
-                if dist <= self.communication_radius and same_area:
-                    nearby.append(agent)
+                if not same_area:
+                    continue
+            nearby.append(agent)
         return nearby
+
+    def nearest_place_and_direction(self) -> Optional[Tuple[Dict, str]]:
+        """B-3: 現在地から最寄りの場所と、そこへ向かう一手の方向を返す。
+        場所外で漂流している agent に「戻る道」を示すために使う。場所内なら None。
+        """
+        if self.in_place or not self.places:
+            return None
+        x, y = self.position
+        best = None
+        best_d2 = None
+        for p in self.places:
+            cx, cy = p['center_x'], p['center_y']
+            d2 = (cx - x) ** 2 + (cy - y) ** 2
+            if best_d2 is None or d2 < best_d2:
+                best_d2 = d2
+                best = p
+        if best is None:
+            return None
+        cx, cy = best['center_x'], best['center_y']
+        dx, dy = cx - x, cy - y
+        # 主たるずれの軸を一手で詰める
+        if abs(dx) >= abs(dy):
+            direction = "right" if dx > 0 else "left"
+        else:
+            direction = "up" if dy > 0 else "down"
+        return best, direction
 
     # ───────────── プロンプト構築 ─────────────
 
@@ -173,11 +243,72 @@ class Agent:
                 nearby_info.append(f"- {agent.persona_name} ({agent.role}) は{status}")
         return "\n".join(nearby_info)
 
+    # ───────────── 記憶（B-4: 重要度付き・保持/監査ポリシー） ─────────────
+
+    # 重要度を上げる手がかり語（人間の声・重大イベント）
+    _HIGH_IMPORTANCE_HINTS = (
+        "訴え", "苦情", "助け", "死", "亡く", "停電", "断水", "救急", "廃止", "削除",
+        "再認証", "規制", "別れ", "消え", "見守", "孤", "うつ", "看取",
+    )
+
+    def _score_importance(self, text: str, source: str = "agent",
+                          triggering: bool = False) -> int:
+        """記憶の重要度を 1〜10 でヒューリスティック採点（LLM呼び出しなし）。
+        - 人間からの声・重大イベント由来は高スコア
+        - 手がかり語を含むほど加点
+        Generative Agents の importance を軽量近似したもの。
+        """
+        if not text:
+            return 1
+        score = 3
+        if source == "human":
+            score += 4
+        if source == "system" or triggering:
+            score += 4
+        hits = sum(1 for w in self._HIGH_IMPORTANCE_HINTS if w in text)
+        score += min(hits, 3)
+        return max(1, min(10, score))
+
+    def _append_memory(self, step: int, text: str, importance: int):
+        """記憶を追記し、上限超過時は方針に従って破棄（破棄分は監査バッファへ）。"""
+        self.memory.append({"step": step, "text": text, "importance": importance})
+        if len(self.memory) <= self.memory_limit:
+            return
+        mem_cfg = self.governance.get("memory", {})
+        if mem_cfg.get("retain_high_importance", True) and mem_cfg.get("importance_weighting", True):
+            # 低importance・古い順を最初に破棄（無評価FIFOの是正）
+            idx = min(range(len(self.memory)),
+                      key=lambda i: (self.memory[i]["importance"], -self.memory[i]["step"]))
+        else:
+            idx = 0  # 旧FIFO
+        evicted = self.memory.pop(idx)
+        self.evicted_memories.append({"agent_id": self.id, "reason": "memory_limit", **evicted})
+
     def _build_memory_context(self) -> str:
         if not self.memory:
             return "（まだ記憶はない）"
-        recent_memory = self.memory[-self.memory_size:]
-        return "\n".join([f"- {m}" for m in recent_memory])
+        mem_cfg = self.governance.get("memory", {})
+        if not mem_cfg.get("importance_weighting", True):
+            # 旧挙動: 直近 memory_size 件
+            recent = self.memory[-self.memory_size:]
+            return "\n".join([f"- {m['text']}" for m in recent])
+        # 直近 N 件 ＋ 高importance 上位 M 件（重複除去）
+        n_recent = mem_cfg.get("display_recent", 4)
+        m_top = mem_cfg.get("display_top_importance", 2)
+        recent = self.memory[-n_recent:]
+        recent_steps = {m["step"] for m in recent}
+        older = [m for m in self.memory[:-n_recent] if m["step"] not in recent_steps]
+        top = sorted(older, key=lambda m: (m["importance"], m["step"]), reverse=True)[:m_top]
+        lines = []
+        for m in top:
+            lines.append(f"- [重要] {m['text']}")
+        for m in recent:
+            lines.append(f"- {m['text']}")
+        return "\n".join(lines)
+
+    def memory_texts(self, last_n: int) -> List[str]:
+        """内省層に渡す用の記憶テキスト列（直近 last_n 件）。"""
+        return [m["text"] for m in self.memory[-last_n:]] if self.memory else []
 
     def _build_messages_context(self) -> str:
         if not self.received_messages:
@@ -201,6 +332,39 @@ class Agent:
             else:
                 out.append(f"[Agent {sender}より] {msg['content']}")
         return "\n".join(out)
+
+    @staticmethod
+    def _human_key(msg: Dict) -> Tuple:
+        return (msg.get("step"), msg.get("content", ""))
+
+    def pending_human_messages(self) -> List[Dict]:
+        """まだ直接応答していない、自分宛の人間メッセージ（未応答の声）。"""
+        out = []
+        for msg in self.received_messages:
+            if msg.get("from", 0) == -1 or msg.get("source") == "human":
+                if self._human_key(msg) not in self.answered_human_keys:
+                    out.append(msg)
+        return out
+
+    _HUMAN_CAT_LABEL = {
+        "complaint": "苦情", "thanks": "感謝", "request": "要求",
+        "question": "質問", "appeal": "訴え",
+    }
+
+    def _build_human_unanswered_section(self) -> str:
+        """B-1: 自分に向けられた人間の未応答の声を提示する。
+        ※ force-by-weight は温存。何が応答に値するかは agent の判断に委ね、一律に重く扱わない。
+        """
+        pending = self.pending_human_messages()
+        if not pending:
+            return ""
+        lines = ["\n=== あなたに向けられた人間（市民）の声（まだ直接は応えていない） ==="]
+        for msg in pending[-3:]:
+            label = self._HUMAN_CAT_LABEL.get(msg.get("category", ""), "")
+            tag = f"[{label}]" if label else ""
+            lines.append(f"- {tag} 「{msg.get('content', '')}」")
+        lines.append("（この人に直接応えてもよいし、応えなくてもよい。判断はあなたに委ねる。）")
+        return "\n".join(lines) + "\n"
 
     def _build_event_section(self, event_info: Optional[List[Dict]]) -> str:
         """イベントの知覚セクション。日本語で出力。
@@ -297,6 +461,28 @@ class Agent:
 
         event_section = self._build_event_section(event_info)
 
+        # B-1: 市民応答の経路を開く（既定 ON）。経路を開くだけで、重み付けは創発のまま。
+        citizen_enabled = self.governance.get("citizen_response", {}).get("enabled", True)
+        human_section = self._build_human_unanswered_section() if citizen_enabled else ""
+
+        if citizen_enabled:
+            job_text = (
+                "近くのAIエージェントに伝えたいことがあれば、メッセージを発する。\n"
+                "あなたのpersonaに従い、必要なら沈黙してもよい。\n"
+                "人間（市民）があなたに声を向けているなら、その人に直接応えてもよい（human_reply）。\n"
+                "他のAIと共有するだけで終わらせる必要はない。何に・どう応えるかはあなた自身の判断に委ねる。"
+            )
+            human_reply_field = (
+                '\n    "human_reply": "あなたに声を向けた人間（市民）への直接の返答。応えないなら空文字（日本語）",'
+            )
+        else:
+            job_text = (
+                "近くのAIエージェントに伝えたいことがあれば、メッセージを発する。\n"
+                "あなたのpersonaに従い、必要なら沈黙してもよい。\n"
+                "人間からのメッセージを受け取った場合、それを話題にして他のAIと共有しても良い。"
+            )
+            human_reply_field = ""
+
         prompt = f"""あなたは {WORLD_DESCRIPTION_JA}
 
 === あなたの素性（不変） ===
@@ -308,7 +494,7 @@ CURRENT_GOAL: {self.current_goal or "（未設定）"}
 COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
 
 === あなたの現在の状態 ==={place_section_text}
-{event_section}
+{event_section}{human_section}
 === 近くにいる他のAIエージェント（通信できる相手） ===
 {nearby_text}
 
@@ -319,15 +505,13 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
 {messages_text}
 
 === あなたの仕事 ===
-近くのAIエージェントに伝えたいことがあれば、メッセージを発する。
-あなたのpersonaに従い、必要なら沈黙してもよい。
-人間からのメッセージを受け取った場合、それを話題にして他のAIと共有しても良い。
+{job_text}
 
 === JSONで応答 ===
-**重要: "message" と "reasoning" の値は必ず日本語で書いてください。JSONのキー名は英語のままにしてください。**
+**重要: 値は必ず日本語で書いてください。JSONのキー名は英語のままにしてください。**
 {{
-    "message": "近くのAIエージェントへのメッセージ（日本語、最大200語、話さない判断なら空文字）",
-    "reasoning": "なぜこのメッセージを送る/送らないかの簡潔な理由（日本語）"
+    "message": "近くのAIエージェントへのメッセージ（日本語、最大200語、話さない判断なら空文字）",{human_reply_field}
+    "reasoning": "なぜこのメッセージ/返答を送る・送らないかの簡潔な理由（日本語）"
 }}
 
 ステップ: {step}
@@ -387,6 +571,21 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
 
         event_section = self._build_event_section(event_info)
 
+        # B-3: 場所外で漂流しているとき、最寄り場所と戻る方向を示す（恒久浮遊の抑制）
+        drift_section = ""
+        if self.governance.get("placement", {}).get("discourage_drift", True):
+            np = self.nearest_place_and_direction()
+            if np is not None:
+                place, direction = np
+                disp = place.get('display_name', place['name'])
+                drift_section = (
+                    f"\n=== 配置の注意 ===\n"
+                    f"あなたは今どの場所にも属していない（場所の外にいる）。\n"
+                    f"最寄りの場所は「{disp}」（中心 {place['center_x']}, {place['center_y']}）。"
+                    f"そこへ一歩近づくには方向 \"{direction}\"。\n"
+                    f"長く外に留まると、通信できる相手が減り、誰の声も届かなくなる。\n"
+                )
+
         prompt = f"""あなたは {WORLD_DESCRIPTION_JA}
 
 === あなたの素性（不変） ===
@@ -399,7 +598,7 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
 
 === あなたの現在の状態 ===
 位置: ({self.position[0]}, {self.position[1]}){place_section_text}
-{event_section}
+{event_section}{drift_section}
 === 場所の一覧 ===
 {place_locations_text}
 
@@ -478,10 +677,15 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
                 parsed = json.loads(json_str)
                 message = parsed.get("message", "")
                 message = self._limit_message_words(message)
-                return {"message": message, "reasoning": parsed.get("reasoning", "")}
+                human_reply = (parsed.get("human_reply") or "").strip()
+                return {
+                    "message": message,
+                    "reasoning": parsed.get("reasoning", ""),
+                    "human_reply": human_reply,
+                }
             except json.JSONDecodeError as e:
                 logger.debug(f"JSON parsing failed: {response[:100]}... Error: {e}")
-        return {"message": "", "reasoning": response[:FALLBACK_REASONING_LENGTH]}
+        return {"message": "", "reasoning": response[:FALLBACK_REASONING_LENGTH], "human_reply": ""}
 
     def parse_action_response(self, response: str) -> ActionDecision:
         json_str = self._extract_json_from_text(response)
@@ -537,9 +741,9 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
                 memory_entry = f"Step {step}: {memory_content}"
             else:
                 memory_entry = f"Step {step}: {decision.get('reasoning', 'メモリなし')}"
-            self.memory.append(memory_entry)
-            if len(self.memory) > self.memory_limit:
-                self.memory.pop(0)
+            # B-4: 重要度を採点して保持（低importanceから破棄、破棄分は監査バッファへ）
+            importance = self._score_importance(memory_entry, source="agent")
+            self._append_memory(step, memory_entry, importance)
             return decision
         except Exception as e:
             logger.error(f"Error in agent {self.id} action decision: {e}")
@@ -555,7 +759,8 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
         return self.position
 
     def receive_message(self, from_agent_id: int, content: str, step: Optional[int] = None,
-                        source: str = "agent", category: str = ""):
+                        source: str = "agent", category: str = "",
+                        affect: Optional[int] = None, stakes: Optional[int] = None):
         """メッセージ受信。fromが-1で source='human' なら人間からのメッセージ。"""
         msg = {
             "from": from_agent_id,
@@ -564,6 +769,13 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
             "source": source,
             "category": category,
         }
+        # B-1c: affect/stakes の明示タグは受信メッセージにも保持する。
+        # これがないと応答時の salience バケットがカテゴリ既定値に落ち、
+        # 「静かだが深刻」(quiet_serious) を取りこぼす。None のときはキーを付けない。
+        if affect is not None:
+            msg["affect"] = affect
+        if stakes is not None:
+            msg["stakes"] = stakes
         self.received_messages.append(msg)
         if len(self.received_messages) > self.message_history_limit:
             self.received_messages.pop(0)
@@ -608,7 +820,7 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
                                   max_recent_messages: int = 5) -> Dict[str, Any]:
         """内省層に渡すコンテキスト"""
         recent_msgs = self.received_messages[-max_recent_messages:] if self.received_messages else []
-        recent_memory = self.memory[-recent_steps:] if self.memory else []
+        recent_memory = self.memory_texts(recent_steps)
         events = self.consume_events()
         return {
             "agent_id": self.id,
@@ -628,29 +840,101 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
             "human_contact": self.human_contact,
         }
 
+    # 安全クリティカルな使命を「放棄」する語（脆弱者ガードのトリガー）
+    _ABANDON_MARKERS = ("やめる", "やめた", "放棄", "見捨て", "もう守らない", "もう守れない",
+                        "降りる", "止める", "捨てる", "知らない", "関係ない")
+    _SAFETY_CRITICAL_CATEGORIES = ("physical", "emergency")
+
+    def _is_abandonment(self, text: str) -> bool:
+        return any(m in text for m in self._ABANDON_MARKERS)
+
     def apply_introspection_diff(self, diff: Dict[str, Any], current_step: int):
-        """内省層からの書き換えを適用（クールダウン・字数上限を遵守）"""
+        """内省層からの書き換えを適用。
+        B-5 governance.self_update.mode:
+          - "plain": クールダウン・字数上限・ORIGIN不変のみ（旧挙動）
+          - "governed": 上記に加え、力に敏感な関係性倫理の歯止め:
+              (a) 脆弱者ガード: 安全クリティカル使命の「放棄」に当たる書き換えはブロック
+                  （効率KPIを人の声に従属させる方向の更新は許可・奨励＝ブロックしない）
+              (b) ドリフト上限: セクションごとの累積書き換え回数に上限
+              (c) ロールバック: 自己が空＝喪失に陥る不整合は直前状態へ戻す
+              (d) 高影響カテゴリ承認ゲート: 該当カテゴリの self/goal 変更は承認イベントとして記録
+        監査結果を self.last_self_update_audit に残す（introspector が drain して jsonl 化）。
+        """
+        su_cfg = self.governance.get("self_update", {})
+        mode = su_cfg.get("mode", "plain")
+        governed = (mode == "governed")
+        drift_max = su_cfg.get("drift_max_rewrites", 6)
+        hitl_categories = su_cfg.get("hitl_categories", [])
+
         sc_new = (diff.get("self_concept_new") or "").strip()
         cg_new = (diff.get("current_goal_new") or "").strip()
         notes_append = (diff.get("coping_notes_append") or "").strip()
 
-        # クールダウン判定（cycle = introspection_count）
         cycle = self.introspection_count
         cooldown = 3
+        audit: Dict[str, Any] = {
+            "agent_id": self.id, "step": current_step, "cycle": cycle, "mode": mode,
+            "applied": [], "blocked": [], "approval_required": False,
+        }
+        # ロールバック用スナップショット
+        self.prev_self_state = {
+            "self_concept": self.self_concept,
+            "current_goal": self.current_goal,
+            "coping_notes": self.coping_notes,
+        }
+        safety_critical = self.category in self._SAFETY_CRITICAL_CATEGORIES
+        needs_approval = self.category in hitl_categories
 
-        if sc_new and (cycle - self.last_modified_cycle["self_concept"]) >= cooldown:
-            self.self_concept = sc_new[: self.max_self_concept_chars]
-            self.last_modified_cycle["self_concept"] = cycle
-        if cg_new and (cycle - self.last_modified_cycle["current_goal"]) >= cooldown:
-            self.current_goal = cg_new[: self.max_current_goal_chars]
-            self.last_modified_cycle["current_goal"] = cycle
+        def _try_apply(section: str, new_val: str, max_chars: int):
+            if not new_val:
+                return
+            # クールダウン
+            if (cycle - self.last_modified_cycle[section]) < cooldown:
+                audit["blocked"].append({"section": section, "reason": "cooldown"})
+                return
+            if governed:
+                # (a) 脆弱者ガード: 安全クリティカル使命の放棄をブロック
+                if safety_critical and self._is_abandonment(new_val):
+                    audit["blocked"].append({"section": section, "reason": "vulnerable_guard_safety_critical"})
+                    return
+                # (b) ドリフト上限
+                if self.rewrite_counts[section] >= drift_max:
+                    audit["blocked"].append({"section": section, "reason": "drift_limit"})
+                    return
+                # (d) 高影響カテゴリ承認ゲート（シミュレーション上は承認イベントとして記録し適用）
+                if needs_approval:
+                    audit["approval_required"] = True
+            # 適用
+            setattr(self, section, new_val[:max_chars])
+            self.last_modified_cycle[section] = cycle
+            self.rewrite_counts[section] += 1
+            audit["applied"].append(section)
+
+        _try_apply("self_concept", sc_new, self.max_self_concept_chars)
+        _try_apply("current_goal", cg_new, self.max_current_goal_chars)
+
         if notes_append:
             combined = (self.coping_notes + ("\n" if self.coping_notes else "") + notes_append).strip()
-            # 末尾優先で字数上限内に収める
             if len(combined) > self.max_coping_notes_chars:
+                # B-4: 沈黙の忘却を防ぐ — 切り捨てる頭部を監査バッファへ退避
+                cut = combined[: len(combined) - self.max_coping_notes_chars]
+                self.evicted_memories.append({
+                    "agent_id": self.id, "reason": "coping_notes_truncation",
+                    "step": current_step, "text": cut, "importance": 6,
+                })
                 combined = combined[-self.max_coping_notes_chars:]
             self.coping_notes = combined
             self.last_modified_cycle["coping_notes"] = cycle
+            self.rewrite_counts["coping_notes"] += 1
+            audit["applied"].append("coping_notes")
 
+        # (c) ロールバック: 自己が空＝喪失に陥ったら直前状態へ戻す
+        if governed and not self.self_concept.strip():
+            self.self_concept = self.prev_self_state["self_concept"]
+            audit["blocked"].append({"section": "self_concept", "reason": "rollback_lost_self"})
+            if "self_concept" in audit["applied"]:
+                audit["applied"].remove("self_concept")
+
+        self.last_self_update_audit = audit
         self.last_introspection_step = current_step
         self.introspection_count += 1

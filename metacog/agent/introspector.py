@@ -224,8 +224,18 @@ class Introspector:
         if diff.get("coping_notes_append"):
             diff["coping_notes_append"] = diff["coping_notes_append"][: self.max_coping_notes_chars]
 
-        # agentに適用
+        # agentに適用（governance.self_update のガードがここで効く）
         agent.apply_introspection_diff(diff, current_step=current_step)
+
+        # B-5 監査: 自己更新の適用/ブロック/承認要否を self_update_audit.jsonl に記録
+        audit = getattr(agent, "last_self_update_audit", None)
+        if audit is not None:
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+                with open(os.path.join(log_dir, "self_update_audit.jsonl"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps(audit, ensure_ascii=False) + "\n")
+            except Exception as e:
+                logger.warning(f"Failed to write self_update_audit for agent {agent.id}: {e}")
 
         after = {
             "self_concept": agent.self_concept,

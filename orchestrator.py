@@ -218,6 +218,9 @@ def main():
     parser.add_argument("--no-video", action="store_true", help="mp4結合をスキップ（フレームPNGのみ生成）")
     parser.add_argument("--log-dir", default=None, help="metacog ログの出力先（指定するとmetacog/configを上書き）")
     parser.add_argument("--seed", type=int, default=None, help="乱数シード（比較実験で初期配置と人間メッセージ抽出を揃える）")
+    parser.add_argument("--governance-mode", choices=["as-config", "baseline", "governed"],
+                        default="as-config",
+                        help="ガバナンス・プリセット（比較用）: as-config=config.yamlのまま / baseline=統治なし / governed=統治あり")
     args = parser.parse_args()
 
     # 乱数シード（指定されたら numpy/Python random どちらも固定）
@@ -242,8 +245,13 @@ def main():
     # 出力ディレクトリ
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # シミュレーション初期化
-    sim = Simulation(config_path=args.sim_config, output_dir=args.output_dir)
+    # シミュレーション初期化（--governance-mode のプリセットがあれば config を上書き）
+    from simulation import governance_preset
+    gov_override = governance_preset(args.governance_mode)
+    sim = Simulation(config_path=args.sim_config, output_dir=args.output_dir,
+                     governance_override=gov_override)
+    if args.governance_mode != "as-config":
+        logger.info(f"Governance preset applied: {args.governance_mode}")
     if args.duration:
         sim.duration = args.duration
 
@@ -266,15 +274,22 @@ def main():
     )
 
     # L1 (Introspector)
+    # B-5: 自己更新は 3アーム。governance.self_update.mode == "off" は --no-introspect と等価（提出ベースライン）。
+    # プリセット上書きを反映した実効値（sim.governance）を使う。
+    self_update_mode = sim.governance.get("self_update", {}).get("mode", "off")
     introspector = None
-    if not args.no_introspect and meta_config.get("introspection", {}).get("enabled", True):
+    if (not args.no_introspect
+            and self_update_mode != "off"
+            and meta_config.get("introspection", {}).get("enabled", True)):
         try:
             introspector = Introspector(meta_config, logger_obj=meta_logger)
-            logger.info(f"Introspector ready (model={introspector.model})")
+            logger.info(f"Introspector ready (model={introspector.model}, self_update.mode={self_update_mode})")
         except (ImportError, EnvironmentError) as e:
             logger.error(f"Introspector を起動できません: {e}")
             logger.error("--no-introspect 付きで実行するか、anthropic SDK と ANTHROPIC_API_KEY を設定してください。")
             return
+    elif self_update_mode == "off":
+        logger.info("self_update.mode=off → 内省層は起動しない（ベースライン）。")
 
     trigger_interval = meta_config.get("introspection", {}).get("trigger_interval_steps", 10)
 

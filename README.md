@@ -154,6 +154,50 @@ python orchestrator.py \
 
 ---
 
+## ガバナンス設定（speculative design: 統治なし⇄統治あり）
+
+`config.yaml` の `governance:` ブロックで、「AIが社会インフラを回すとき必要になる設定」を**実験ノブ**として切り替えられる。
+すべて `false`／`"off"` にすると「ガバナンス設定ゼロのベースライン（旧挙動）」を再現できる。設計の錨は**力に敏感な関係性倫理**（各関係において、より依存的・脆弱で不可逆な害を受けうる側＝多くは市民、廃止局面ではAI、の安全と声に保護の重みを置く）。
+
+| ノブ | 内容 |
+|---|---|
+| `citizen_response.enabled` | 市民へ**直接応える経路**を開く（応答するか・何に応えるかは創発のまま温存） |
+| `citizen_response.weighted_palette` | 人間メッセージに `affect`(感情の強度)/`stakes`(深刻さ) の2軸タグ。「静かだが深刻」な声の取りこぼしを可視化 |
+| `communication.topology` | `radius_crossplace`(場所境界をまたぐ) / `neighbor_strict`(旧) |
+| `placement.discourage_drift` | 場所外で最寄り場所へ戻る誘因を提示（恒久浮遊の抑制） |
+| `memory.importance_weighting` | 記憶に重要度。低importanceから破棄し `memory_audit.jsonl` に退避（沈黙の忘却を防ぐ） |
+| `self_update.mode` | 自己更新の3アーム：`off`(=現提出ベースライン) / `plain` / `governed`(脆弱者ガード・ドリフト上限・ロールバック・高影響承認) |
+| `deprecation.due_process` | AI削除前に 事前通知→理由→最終陳述記録→削除（`deprecation_audit.jsonl`） |
+
+`self_update.mode` が `"off"` のときは `--no-introspect` と等価（内省層は起動しない）。`plain`/`governed` を回すには `ANTHROPIC_API_KEY` が必要。
+
+### 比較（統治なし vs 統治あり）
+
+**同一コード・同一シードで設定だけ切り替えて**比較する（別リポジトリやコード複製はしない＝コードドリフトで比較が壊れるため）。プリセットは `--governance-mode {as-config|baseline|governed}`。
+
+```bash
+# 一括: baseline と governed を順に回し、指標を並べて出す（既定は --no-viz で高速）
+./run_compare.sh 100 42
+
+# フレーム/動画も出したい場合のみ
+WITH_VIZ=1 ./run_compare.sh 100 42
+
+# 手動で個別に
+python orchestrator.py --governance-mode baseline --output-dir output_baseline --seed 42 --no-introspect --no-viz
+python orchestrator.py --governance-mode governed --output-dir output_governed --seed 42 --no-introspect --no-viz
+python analyze_compare.py output_baseline output_governed
+```
+
+> 💡 比較指標は `messages.jsonl` と監査 jsonl のみを読むため、`run_compare.sh` は既定で **`--no-viz`**（4Kフレーム/動画のレンダリングを省略）で回し、実行時間を大きく短縮する。再現用の固定版依存は `requirements.lock`（`pip freeze` 実測）を参照。
+
+> ⚠️ 旧 `output_no_intro/` とは比較しない（**旧コード製**なのでコード差と設定差が混ざる）。必ず新コードで baseline / governed の両方を回す。
+
+**実験系統の位置づけ（v1 / v2）**: `output_no_intro/` は前実験（v1）のアーカイブとしてそのまま保全し、本ブランチのガバナンス版は更新版（v2）として `output_baseline` / `output_governed` に**別フォルダで**保存する（`.gitignore` 済み・v1 は改変しない）。v1 と v2 の間で数値の優劣主張はしない（コード差が混ざるため）。v2 内の baseline ⇄ governed が、設定差だけを分離した妥当な比較。
+
+`analyze_compare.py` は2つの output を読み、市民への直接応答率・deflection率・salience triage（声は大きいが軽い⇄静かだが深刻 の応答率）・互恵性・廃止デュープロセス履行を並べて出す（いずれも proxy 指標）。
+
+LLM非依存のユニットテスト: `python test_governance.py`（Ollama/API不要）。
+
 ## 出力物
 
 実行後、以下が生成される：
@@ -163,9 +207,12 @@ python orchestrator.py \
 - `metacog/logs/agent_log.jsonl` — セッションメタログ
 - `metacog/logs/inner_thought.jsonl` — L1内省イベント全件
 - `metacog/logs/coined_terms.jsonl` — 創発語ログ
-- `output/messages.jsonl` — 全エージェント発話
+- `output/messages.jsonl` — 全エージェント発話（市民への直接応答は `category:"human_reply"`/`to:-1`、人間メッセージは `affect`/`stakes` タグ付き）
 - `output/memory_reasoning.jsonl` — 各stepのメモリと推論
 - `output/positions.jsonl` — 各stepの全エージェントの位置情報（移動前後・action・direction・場所）
+- `output/memory_audit.jsonl` — 破棄/末尾切りされた記憶（沈黙の忘却の監査）
+- `output/deprecation_audit.jsonl` — AI廃止のデュープロセス記録（通知・理由・最終陳述）
+- `metacog/logs*/self_update_audit.jsonl` — 自己更新の適用/ブロック/承認要否（governed アーム）
 - `output/frames/step_NNNN.png` — 各stepフレーム（4K, ~10MB/枚）
 - `output/key_frames/step_NNNN.png` — 重要step（30/50/75/90/100）
 - `output/simulation.mp4` — 100step統合動画（5fps、20秒）

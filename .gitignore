@@ -24,4 +24,4 @@ Thumbs.db
 *.swp
 
 # Claude Code local
-.claude/scheduled_tasks.lock
+.claude/
