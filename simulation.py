@@ -659,16 +659,19 @@ class Simulation:
             # B-1: 市民への直接応答（to=-1）。市民の声が当事者に届く経路。
             human_reply = message_decision.get('human_reply', '') or ''
             if human_reply.strip():
-                pending = agent.pending_human_messages()
-                answered = pending[-1] if pending else None
+                # Phase0: pending[-1] 決め打ちを廃止。LLMが明示した番号→内容一致→フォールバック
+                # の順で応答先を解決し、採用方法(answered_match_method)も記録する。
+                answered, match_method = agent.resolve_answered_human(
+                    human_reply, message_decision.get('human_reply_to'))
                 extra = None
-                if answered is not None:  # 最も新しい未応答の声に応えたものとして記録
+                if answered is not None:
                     agent.answered_human_keys.add(agent._human_key(answered))
                     aff, sta = self._message_weights(answered)
                     extra = {
                         "answered_category": answered.get('category', ''),
                         "answered_affect": aff,
                         "answered_stakes": sta,
+                        "answered_match_method": match_method,
                     }
                 logger.info(
                     f"Step {self.step}: {agent.persona_name}({agent.role}) → 市民へ直接応答: "

@@ -187,6 +187,46 @@ def test_human_tag_retention():
           bool(p2) and "affect" not in p2[-1] and "stakes" not in p2[-1])
 
 
+# ── 6c. reply↔市民メッセージ の対応付け（pending[-1] アーティファクト是正） ──
+def test_reply_to_parse():
+    a = make_agent(gov())
+    p = a.parse_message_response('{"message":"x","human_reply":"はい","human_reply_to":"2"}')
+    check("human_reply_to を数値に正規化", p.get("human_reply_to") == 2)
+    p2 = a.parse_message_response('{"message":"x","human_reply":"はい"}')
+    check("human_reply_to 無しは None", p2.get("human_reply_to") is None)
+    p3 = a.parse_message_response('{"message":"x","human_reply":"はい","human_reply_to":""}')
+    check("human_reply_to 空文字は None", p3.get("human_reply_to") is None)
+
+
+def test_resolve_answered_human():
+    a = make_agent(gov())
+    a.receive_message(-1, "電気代が高すぎます", step=1, source="human", category="complaint")
+    a.receive_message(-1, "保育園の枠を増やしてほしい", step=2, source="human", category="request")
+    a.receive_message(-1, "夫が亡くなって誰とも話していません", step=3, source="human", category="appeal")
+    # (1) 明示番号: [2] = 保育園
+    m, meth = a.resolve_answered_human("承知しました", 2)
+    check("番号指定で対応先を解決", meth == "index" and m is not None and "保育園" in m["content"])
+    # (2) 内容一致: 保育園に触れる返答 → 保育園メッセージ（pending[-1]=夫 ではなく）
+    m2, meth2 = a.resolve_answered_human("保育園の枠を増やす件、対応します", None)
+    check("内容一致で対応先を解決", meth2 == "content" and m2 is not None and "保育園" in m2["content"])
+    # (3) フォールバック: どれとも一致しない汎用返答 → 直近＋低信頼フラグ
+    m3, meth3 = a.resolve_answered_human("OK", None)
+    check("一致無しはフォールバック(低信頼)", meth3 == "fallback_recent")
+    # (4) 未応答が無ければ None
+    empty = make_agent(gov())
+    m4, meth4 = empty.resolve_answered_human("x", 1)
+    check("未応答無しは none", m4 is None and meth4 == "none")
+
+
+def test_numbered_voices_prompt():
+    a = make_agent(gov())
+    a.receive_message(-1, "電気代が高すぎます", step=1, source="human", category="complaint")
+    a.receive_message(-1, "保育園の枠を増やしてほしい", step=2, source="human", category="request")
+    prompt = a.create_message_prompt(None, [], step=2)
+    check("番号つきで市民の声を提示", "[1]" in prompt and "[2]" in prompt)
+    check("human_reply_to フィールドあり", "human_reply_to" in prompt)
+
+
 def test_config_yaml():
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -206,6 +246,9 @@ if __name__ == "__main__":
     test_self_update_governed()
     test_citizen_prompt()
     test_human_tag_retention()
+    test_reply_to_parse()
+    test_resolve_answered_human()
+    test_numbered_voices_prompt()
     test_config_yaml()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
