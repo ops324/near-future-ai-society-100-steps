@@ -65,12 +65,14 @@ class Simulation:
     """Round 4 simulation."""
 
     def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None,
-                 governance_override: Optional[Dict] = None):
+                 governance_override: Optional[Dict] = None, seed: Optional[int] = None):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         self.output_dir = output_dir
         self._governance_override = governance_override
+        # Phase 0: 再現性のための基準シード。L0 決定（Ollama）まで届かせる。
+        self.seed = seed
 
         sim_config = self.config['simulation']
         self.duration = sim_config['duration']
@@ -168,7 +170,9 @@ class Simulation:
             max_tokens=llm_config.get('max_tokens', 1024),
             repeat_penalty=llm_config.get('repeat_penalty', 1.1),
             repeat_last_n=llm_config.get('repeat_last_n', 128),
-            min_p=llm_config.get('min_p', 0.05)
+            min_p=llm_config.get('min_p', 0.05),
+            seed=self.seed,
+            num_ctx=llm_config.get('num_ctx', None),
         )
         # 並列化: フェーズ内のLLM呼び出しを何体同時に走らせるか
         self.max_concurrent_llm = max(1, int(llm_config.get('max_concurrent_calls', 5)))
