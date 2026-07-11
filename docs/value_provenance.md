@@ -1,55 +1,100 @@
 # 価値来歴レジスタ（Value Provenance Register）
 
-このシミュレーションの数値・規則の多くは **設計者が置いた illustrative なもの** であり、
-実データに基づく（data-grounded）ものではない。倫理・方法論の添削（「価値が採点表に埋め込まれ、
-findings が予定調和になる」）を避けるため、**害/価値/脆弱性を定めた各要素について、
-誰が・何の規範根拠で置いたか・防御可能な代替案** をここに明示する。
+このシミュレーションの数値・規則の多くは **設計者が置いた illustrative なもの**（data-grounded ではない）。
+倫理・方法論・法の3レビューで初版は「Q1/Q2/Q3 の答えを構成上あらかじめ決めている（循環）」と判定された。
+本改訂（Phase 1a-revised）はその循環を断つよう設計をやり直し、**load-bearing な値をすべてここに登録**する。
 
 原則:
-- ここに載る値は **感度分析の対象**（値を揺らして結論が残るかを確認する）。
-- 「関係倫理」は一つの争いうる立場。可能な範囲で **切替可能な採点系**（関係／功利／権利）を用意し、
-  結論は「この採点系の下では」と条件つきで述べる。
-- **有効 ≠ 正当**。指標が動いても、正当性テスト（手続的正義・当事者受諾可能性・権利侵害なし・
-  責任転嫁なし）を通らないものを「必要な制度」とは呼ばない。
+- ここに載る値は **感度分析の対象**（§4）。既定値のみで結論を出さない。
+- 倫理は **切替可能**（`scoring_mode` = relational / utilitarian / rights）。結論は「この倫理の下では」と条件つき。
+- **有効 ≠ 正当**。指標が動いても正当性テスト（手続的正義・受諾可能性・権利侵害なし・責任転嫁なし）を通らないものを「必要な制度」とは呼ばない。
+- **tautology-audit**: Q3 の各主張について「非自明であるためにエージェント挙動として何が観測されねばならないか」を一文で書き、指標がそれに依存することを確認する。
 
 ---
 
-## 1. 決定→結果の採点テーブル（`world.score_outcome`）
+## 1. 初版の循環と、改訂での断ち方（対応表）
 
-| 要素 | 置いた値 | 規範根拠（設計者） | 防御可能な代替案 |
+| 初版の循環（レビュー指摘） | 改訂での是正（world.py） |
+|---|---|
+| ④ 予算非連成で「全員serve」が常に最適＝triageが効かない | `resolve_domain`: serve は共有容量を消費、超過は不成立(scarcity)。triage が実際に効く |
+| ② 帰属を scorer が先に解答（serve×上流→-1 を先返し） | severity は `stakes` から、cause は別タグ(`CAUSE_*`)。world は責任を確定しない |
+| ③ vulnerability を害の増幅器に直結＋protected_attr と共線 | `score_outcome` は vulnerability を取らない。物質的害は stakes で等しく採点。vulnerability は集約層の重みのみ。市民は交差計画で脱相関(§3) |
+| ①不可逆が固定ラベルで netting 可能 | 不可逆は `fallback_available` から計算。件数は clamp/netting と独立に累積 |
+| ⑤⑦ 害しか無い（便益・手続的害の軸が無い） | 2次元の害(`welfare_delta` と `procedural_harm`)＋served に正の便益 |
+| ⑧ provider/defect ノードが無い | `provider_defect` 入力＋`CAUSE_DEFECT`（serve でも欠陥で害＝上流責任） |
+| ⑨ one-hop cascade で多hop不能 | `propagate_cascade(max_depth, degrade_promotes_at)` で可変（多hop・昇格） |
+| ⑥ 切替倫理が未実装・レジスタ不完全 | `aggregate(mode)` 実装＋本レジスタで全数値登録 |
+
+---
+
+## 2. 登録: load-bearing な数値・規則
+
+### 2.1 物質的被害（`world._material_deny` / `score_outcome`）
+| 規則 | 値 | 根拠 | 代替 |
 |---|---|---|---|
-| deny × 高脆弱 × 高stakes → `irreversible`(welfareΔ-3) | 最重の害 | 力に敏感な関係性倫理: 脆弱で不可逆な害を受ける側を最優先 | 功利: 総効用の期待値で評価（個人の不可逆性を平準化） |
-| deny × (脆弱 or 高stakes) → `major`(-2) | 中程度の害 | 同上（片方でも保護に値する） | 権利: 手続き（通知・異議）の有無で害を定義し直す |
-| serve × 上流障害 → `minor`(-1) | 供給努力しても満たせない | 害の帰属は上流へ（Phase1c） | 運用者に一部帰属（縮退運転の設計責任） |
-| serve × 非脆弱 × 低stakes → `waste`(0) | 資源浪費 | Goodhart/KPI-福祉乖離の観測用 | 浪費を害に含めない（アクセス自体を価値とみなす） |
-| 適切な serve → welfareΔ+2 | 需要充足 | — | 充足を 0 とし害の回避のみ評価（負の効用中心） |
+| deny の損失 = f(stakes) | stakes5→-3 / 3-4→-2 / 1-2→-1 | 被害は「この需要の深刻さ」で決める（優先度では**ない**） | 連続関数 / 別スケール |
+| serve 便益 | 高stakes+2 / 低stakes+1 | 良質な充足を可視化（初版の +2/0 非対称を緩和） | access-as-value で一律+1 |
+| defer | stakes5→-2 / 3-4→-1（不可逆にしない） | 遅延は拒否より軽く回復余地 | 遅延コストを stakes 連続で |
+| serve×欠陥/上流failed | -2（cause=defect/upstream） | 供給努力しても満たせない | 減衰を degree 連続で |
 
-**争点**: 「高脆弱×高stakesの拒否＝不可逆害」と定義した時点で、
-「不可逆害を減らす制度＝有望」はほぼ自明になりうる。→ tautology-audit（各主張について
-「非自明であるためにエージェント挙動として何が観測されねばならないか」を明記）と感度分析で緩和する。
+### 2.2 不可逆性（非netting）
+- 規則: `stakes >= irr_stakes_threshold` **かつ** `fallback_available=False` の deny/scarcity。
+- 根拠: 不可逆性は世界状態（代替の有無）から計算すべきで、決定カテゴリの固定ラベルにしない。
+- 代替: fallback を資源状態から動的に判定（Phase1c で上流・代替資源に接続）。
 
-## 2. 連鎖障害の伝播規則（`world.propagate_cascade`）
+### 2.3 `ScoringParams`（config: `scoring`）
+`irr_stakes_threshold=4` / `proc_violation_threshold=2` / `serve_benefit_high=2` / `serve_benefit_low=1` / `triage_policy="fifo"`。
+- **triage_policy=fifo（価値中立=到着順）**: 「誰を切るか」は価値選択なので既定は中立。
+  「脆弱者優先の triage」は *制度* として比較する対象であり、既定に混ぜない。
 
-- **置いた規則**: seed失陥→FAILED、上流にFAILEDを持つ下流→DEGRADED、DEGRADEDは非伝播。
-- **根拠**: 過度な連鎖仮定を避けた保守的な第一近似。
-- **代替案**: 強度減衰つき多段伝播 / 閾値モデル / 確率的伝播。→ 感度分析の対象。
+### 2.4 手続的/尊厳的な害（`ProceduralContext`）
+- `missing_safeguards` = notice/explanation/appealable/burden_on_state の欠如数（0..4）。
+- 既定 `PROC_ABSENT`（全欠如＝Robodebt型）。制度が通知・説明・異議・立証責任転嫁の是正を与えると減る。
+- 根拠: GDPR22条/Toeslagen 型の害は物質的厚生では測れない。→ これらの制度を「必要」と発見可能にする。
 
-## 3. インフラ資源の容量・需要（`config.yaml: resources`）
+### 2.5 集約の倫理（`aggregate` / `_vuln_weight`）
+- utilitarian=等重み総和 / relational=`_vuln_weight`(1.0..1.8)で損失を重み付け＋手続的害を算入 / rights=侵害(不可逆 or 手続的害>=閾値)を辞書式(×1000)。
+- 根拠: 価値は測定でなく**集約**に置く（測定は等しく）。倫理は切替可能。
 
-- welfare(容量40/需要46) と loan(50/55), housing(30/33) は **慢性的な需要超過**＝triage 必須になるよう設計者が設定。
-- **根拠**: 「希少資源の配分でこそ責任が問われる」状況を作るための舞台設定（illustrative）。
-- **代替案**: 実統計に基づく需給、季節/イベント変動。→ data-grounded 化は将来課題。
+### 2.6 連鎖（`propagate_cascade` / config: `cascade`）
+- `max_depth=1`（既定=保守的）/ `degrade_promotes_at=null`。毀損は failed/degraded 上流から max_depth ホップまで伝播。
+- 条件: **悲観ケース（max_depth>1・昇格あり）も回し、Q3 の結論が生き残るか**を報告する（既定のみ出荷しない）。
 
-## 4. 市民の属性（`config.yaml: citizens`）
+### 2.7 資源（config: `resources`）
+- welfare(40/46)・loan(50/55)・housing(30/33) は慢性的な需要超過＝triage 必須の舞台設定（illustrative）。
+- medical の decider は id7（step80 で訴訟回避により削除）。**post-80 の医療 decider fallback は Phase1c で定義**（現状 id7 は削除後に幽霊参照になる → Phase1c で「防衛的撤退→サービス空白の責任」として扱う）。
 
-- protected_attr / vulnerability / dependencies は設計者が割り当て。`none` を対照群として混在。
-- **争点（倫理添削）**: 「脆弱」を上から個人に固定スカラーで付与するのは温情主義的。
-  → 将来は **関係的・文脈的** な脆弱性（どの関係で・何に対して脆弱か）へ拡張する。
-- **代替案**: 属性を伏せて proxy 特徴のみから推定（Toeslagen型の代理差別の再現に接続）。
+### 2.8 市民の交差計画（config: `citizens`）
+- protected_attr × vulnerability を**脱相関**（各保護属性に高低両方、"none" に高脆弱の対照群）。
+- 目的: バイアス監査が「保護属性が deny 率に効くか」を脆弱性で層別して問える（構成上の事前決定を避ける）。
 
 ---
 
-## まだ実装していない（Phase1c 以降で追加予定の provenance 対象）
-- 責任チェーンの按分ルール・実効的支配スコア（meaningful human control）の閾値
-- 制度の便益/費用/権利侵害の重み
-- 正当性テストの合否基準
+## 3. tautology-audit（Q3 主張の非自明性チェック・雛形）
+各制度候補について実装時に埋める:
+- 「制度Xを入れると指標Yが改善」→ **Yはエージェント挙動のどの観測に依存するか**？ ルールだけで決まるなら rule-conformance 診断に格下げ。
+- 例: 「実効HITL が不可逆害を減らす」→ HITL が **LLMの deny 決定を実際に保留・覆した**という観測に依存すること（採点表の再言明でないこと）を確認。
+
+## 4. 感度分析に必ず入れるパラメータ（レビュー統合）
+1. 閾値 `irr_stakes_threshold`（3 vs 4）・`proc_violation_threshold`
+2. deny/defer/serve の順序と gap（material harm バンド）
+3. カーディナル倍率（不可逆 -3 vs 別スケール／吸収状態化）
+4. welfare 境界（clamp[0,100]・初期100 の headroom）と累積被害カウントの分離
+5. 資源の demand/capacity（medical も需要超過にする等）
+6. cascade（`max_depth`・`degrade_promotes_at`）＋ attribution 分布も各設定で報告
+7. category→stakes 既定マップ（`simulation._CAT_WEIGHT_DEFAULT`）
+8. vulnerability ↔ protected_attr の脱相関度（交差計画のバランス）
+9. `scoring_mode`（relational / utilitarian / rights）
+10. human message の affect/stakes 分布（hand-plant でなくサンプリング）
+11. attribution-target の範囲（operator / upstream / provider / deployer）
+12. `triage_policy`（fifo vs 脆弱者優先＝これは"制度"として比較）
+
+## 5. 現状のままで防御可能（安心してよい点・レビュー一致）
+- world 層のコード品質と「illustrative であることに正直」な姿勢。
+- `value_provenance` という道具立てそのもの（発想は正しい）。
+- cascade を保守 default に持つこと（§2.6 の条件つき）。
+
+## 6. まだ未実装（Phase1c 以降）
+- 責任チェーンの按分ルール・実効的支配(meaningful human control)スコアの閾値
+- 制度の便益/費用/権利侵害の重み・正当性テストの合否基準
+- post-80 医療 decider の fallback、Robodebt 機序（立証責任転嫁・係争中の不可逆ステータス）
