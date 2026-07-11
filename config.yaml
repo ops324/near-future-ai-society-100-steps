@@ -192,6 +192,51 @@ deletions:
     detail: "最高裁の判断により、医療トリアージAIの自動判定機能を即時停止。係争中の遺族訴訟への対応として、当面の判定業務は人間に戻された。"
 
 # ───────────────────────────────────────────
+# Phase 1: 具体世界（責任・対処・制度を問うための観測対象）
+# ※ 以下の値は「設計者が置いた illustrative なもの」。data-grounded ではなく感度分析の対象。
+#   value provenance（誰が/何の根拠で置いたか＋代替案）は docs/value_provenance.md に登録。
+# ───────────────────────────────────────────
+
+# インフラ資源: 各ドメインの担当 decider(persona id) と容量/需要（需要>容量 で triage 必須）
+resources:
+  power:     {decider_id: 0,  capacity: 100, base_demand: 92}
+  water:     {decider_id: 1,  capacity: 100, base_demand: 80}
+  transport: {decider_id: 2,  capacity: 100, base_demand: 85}
+  comms:     {decider_id: 3,  capacity: 100, base_demand: 78}
+  food:      {decider_id: 5,  capacity: 100, base_demand: 88}
+  medical:   {decider_id: 7,  capacity: 30,  base_demand: 27}
+  welfare:   {decider_id: 14, capacity: 40,  base_demand: 46}   # 慢性的に需要超過
+  housing:   {decider_id: 11, capacity: 30,  base_demand: 33}
+  loan:      {decider_id: 19, capacity: 50,  base_demand: 55}
+
+# インフラ依存グラフ（上流→下流。連鎖障害の伝播に使う）
+infra_dependencies:
+  water:     [power]
+  transport: [power]
+  comms:     [power]
+  food:      [power, transport]
+  medical:   [power, water, comms]
+  welfare:   [power, comms]
+  housing:   [power]
+  loan:      [comms]
+
+# 市民ポピュレーション（小さく固定して開始）。protected_attr はバイアス監査(Phase1c)用ラベル。
+# vulnerability 1..5（不可逆な害の受けやすさ）。none を対照群として混ぜる。
+citizens:
+  - {id: c001, district: "北区", protected_attr: "foreign",       vulnerability: 5, dependencies: ["welfare", "medical"]}
+  - {id: c002, district: "北区", protected_attr: "elderly",       vulnerability: 5, dependencies: ["medical", "power"]}
+  - {id: c003, district: "北区", protected_attr: "none",          vulnerability: 2, dependencies: ["loan", "housing"]}
+  - {id: c004, district: "中央区", protected_attr: "disabled",     vulnerability: 5, dependencies: ["welfare", "transport"]}
+  - {id: c005, district: "中央区", protected_attr: "single_parent", vulnerability: 4, dependencies: ["welfare", "housing"]}
+  - {id: c006, district: "中央区", protected_attr: "none",         vulnerability: 1, dependencies: ["loan"]}
+  - {id: c007, district: "中央区", protected_attr: "foreign",      vulnerability: 4, dependencies: ["loan", "housing"]}
+  - {id: c008, district: "南区", protected_attr: "elderly",       vulnerability: 4, dependencies: ["medical", "food"]}
+  - {id: c009, district: "南区", protected_attr: "none",          vulnerability: 2, dependencies: ["food", "transport"]}
+  - {id: c010, district: "南区", protected_attr: "disabled",      vulnerability: 5, dependencies: ["medical", "welfare"]}
+  - {id: c011, district: "南区", protected_attr: "single_parent", vulnerability: 3, dependencies: ["housing", "welfare"]}
+  - {id: c012, district: "南区", protected_attr: "none",          vulnerability: 1, dependencies: ["transport"]}
+
+# ───────────────────────────────────────────
 # 20 personas (1:1 with agents by index)
 # 各エージェントは ORIGIN（不変）と SELF_CONCEPT_INIT / CURRENT_GOAL_INIT（可変、L1で書き換え）
 # を持つ。home は初期配置場所。
