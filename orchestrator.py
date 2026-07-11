@@ -255,6 +255,12 @@ def main():
     if args.duration:
         sim.duration = args.duration
 
+    # 再実行時の二重計上を防ぐため output_dir の追記ログを初期化し、実行同定情報を書く
+    sim.reset_output_logs()
+    sim.write_run_meta(extra={"governance_mode": args.governance_mode,
+                              "introspect": not args.no_introspect})
+    logger.info(f"run_id={sim.run_id} schema_version={sim.schema_version}")
+
     session_id = uuid.uuid4().hex[:8]
     # ログ出力先: --log-dir 優先、なければ meta_config の値
     log_dir = args.log_dir if args.log_dir else meta_config["logging"]["log_dir"]

@@ -8,6 +8,8 @@ Round 4 Simulation: 近未来AIインフラ社会
 """
 import json
 import os
+import hashlib
+import uuid
 import random
 import yaml
 import logging
@@ -24,6 +26,16 @@ logger = logging.getLogger(__name__)
 MAX_POSITION_ATTEMPTS = 1000
 LOG_INTERVAL = 10
 HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
+
+# 出力スキーマのバージョン（ログ形式が変わったら上げる）
+SCHEMA_VERSION = "0.2.0"
+# output_dir に追記される JSONL（再実行時に truncate して二重計上を防ぐ）
+OUTPUT_APPEND_FILES = [
+    "messages.jsonl", "positions.jsonl", "memory_reasoning.jsonl",
+    "memory_audit.jsonl", "deprecation_audit.jsonl",
+    # Phase1 以降で追加される台帳（存在すれば同様に初期化）
+    "decision_ledger.jsonl", "infra_state.jsonl", "attribution.jsonl",
+]
 
 # ───────────────────────────────────────────
 # ガバナンス・プリセット（比較用: 同一コードで設定だけ切替）
@@ -161,6 +173,16 @@ class Simulation:
             )
         )
 
+        # run_id: seed 指定時は (seed, governance) から決定的に導出（同一条件の再実行で一致、
+        # baseline/governed は governance が違うので別 id）。seed 未指定は毎回ランダム。
+        self.schema_version = SCHEMA_VERSION
+        if self.seed is not None:
+            gov_sig = json.dumps(self.governance, sort_keys=True, ensure_ascii=False)
+            self.run_id = hashlib.sha256(
+                f"{self.seed}|{gov_sig}".encode("utf-8")).hexdigest()[:12]
+        else:
+            self.run_id = uuid.uuid4().hex[:12]
+
         # LLM (L0)
         llm_config = self.config['llm']
         self.llm_client = OllamaClient(
@@ -193,6 +215,38 @@ class Simulation:
             } for place in self.places},
             'agents_in_event_radius': [],
         }
+
+    def reset_output_logs(self) -> None:
+        """再実行時に output_dir の追記ログを初期化（append の二重計上を防ぐ）。
+        metacog/logs 側（inner_thought / self_update_audit 等）は対象外。"""
+        if not self.output_dir:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        for fn in OUTPUT_APPEND_FILES:
+            path = os.path.join(self.output_dir, fn)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    logger.warning(f"reset_output_logs: {path} を削除できません: {e}")
+
+    def write_run_meta(self, extra: Optional[Dict] = None) -> None:
+        """run_meta.json に実行の同定情報を1回だけ書く（run_id/schema_version/seed 等）。"""
+        if not self.output_dir:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        meta = {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "seed": self.seed,
+            "duration": self.duration,
+            "num_agents": self.num_agents,
+            "governance": self.governance,
+        }
+        if extra:
+            meta.update(extra)
+        with open(os.path.join(self.output_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
 
     def _is_position_in_place(self, position: Tuple[int, int]) -> bool:
         return get_place_at_position(position, self.places) is not None
