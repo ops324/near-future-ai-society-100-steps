@@ -3,6 +3,7 @@ Ollama API client for LLM agent communication
 """
 import requests
 import json
+import hashlib
 import logging
 from typing import Dict, List, Optional
 
@@ -31,7 +32,9 @@ class OllamaClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         repeat_penalty: float = DEFAULT_REPEAT_PENALTY,
         repeat_last_n: int = DEFAULT_REPEAT_LAST_N,
-        min_p: float = DEFAULT_MIN_P
+        min_p: float = DEFAULT_MIN_P,
+        seed: Optional[int] = None,
+        num_ctx: Optional[int] = None,
     ):
         self.base_url = base_url.rstrip('/')
         self.model = model
@@ -40,7 +43,24 @@ class OllamaClient:
         self.repeat_penalty = repeat_penalty
         self.repeat_last_n = repeat_last_n
         self.min_p = min_p
+        # Phase 0: 再現性のための基準シード。None なら従来通り非再現（Ollama 既定）。
+        # 呼び出しごとのシードは prompt から決定的に導出する（並列実行順に依存しない）。
+        self.seed = seed
+        self.num_ctx = num_ctx
         self.api_url = f"{self.base_url}/api/generate"
+        if self.seed is not None:
+            logger.info(
+                "OllamaClient sampling config: model=%s temperature=%s seed=%s num_ctx=%s "
+                "(per-call seed = f(base_seed, prompt))",
+                self.model, self.temperature, self.seed, self.num_ctx,
+            )
+
+    def _derive_seed(self, prompt: str) -> int:
+        """base_seed と prompt から決定的にper-callシードを導出。
+        並列実行のスケジューリング順に依存しないため、同一 base_seed の再実行で完全再現する。
+        """
+        h = int(hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:8], 16)
+        return (int(self.seed) * 1000003 + h) % 2147483647
 
     def generate(
         self,
@@ -66,19 +86,24 @@ class OllamaClient:
             max_tokens = self.max_tokens
 
         try:
+            options = {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "repeat_penalty": self.repeat_penalty,
+                "repeat_last_n": self.repeat_last_n,
+                "min_p": self.min_p
+            }
+            if self.seed is not None:
+                options["seed"] = self._derive_seed(prompt)
+            if self.num_ctx is not None:
+                options["num_ctx"] = int(self.num_ctx)
             payload = {
                 "model": self.model,
                 "prompt": prompt,
                 "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                    "repeat_penalty": self.repeat_penalty,
-                    "repeat_last_n": self.repeat_last_n,
-                    "min_p": self.min_p
-                }
+                "options": options
             }
-            
+
             response = requests.post(
                 self.api_url,
                 json=payload,

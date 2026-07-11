@@ -217,7 +217,7 @@ def main():
     parser.add_argument("--no-viz", action="store_true", help="可視化を無効化")
     parser.add_argument("--no-video", action="store_true", help="mp4結合をスキップ（フレームPNGのみ生成）")
     parser.add_argument("--log-dir", default=None, help="metacog ログの出力先（指定するとmetacog/configを上書き）")
-    parser.add_argument("--seed", type=int, default=None, help="乱数シード（比較実験で初期配置と人間メッセージ抽出を揃える）")
+    parser.add_argument("--seed", type=int, default=None, help="乱数シード（初期配置・人間メッセージ抽出・L0決定=Ollamaまで揃え、実験を再現可能にする）")
     parser.add_argument("--governance-mode", choices=["as-config", "baseline", "governed"],
                         default="as-config",
                         help="ガバナンス・プリセット（比較用）: as-config=config.yamlのまま / baseline=統治なし / governed=統治あり")
@@ -249,11 +249,17 @@ def main():
     from simulation import governance_preset
     gov_override = governance_preset(args.governance_mode)
     sim = Simulation(config_path=args.sim_config, output_dir=args.output_dir,
-                     governance_override=gov_override)
+                     governance_override=gov_override, seed=args.seed)
     if args.governance_mode != "as-config":
         logger.info(f"Governance preset applied: {args.governance_mode}")
     if args.duration:
         sim.duration = args.duration
+
+    # 再実行時の二重計上を防ぐため output_dir の追記ログを初期化し、実行同定情報を書く
+    sim.reset_output_logs()
+    sim.write_run_meta(extra={"governance_mode": args.governance_mode,
+                              "introspect": not args.no_introspect})
+    logger.info(f"run_id={sim.run_id} schema_version={sim.schema_version}")
 
     session_id = uuid.uuid4().hex[:8]
     # ログ出力先: --log-dir 優先、なければ meta_config の値

@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 # Constants
 FALLBACK_REASONING_LENGTH = 100
 MAX_MESSAGE_WORDS = 200
+# 未応答の市民の声をプロンプトに何件まで番号つきで提示するか（human_reply_to の対象範囲）
+HUMAN_UNANSWERED_DISPLAY = 3
+# reply↔市民メッセージ の内容一致とみなす char-bigram Jaccard の下限
+CONTENT_MATCH_THRESHOLD = 0.15
 
 # Direction mappings (4 cardinal directions only)
 DIRECTION_MAP = {
@@ -38,6 +42,7 @@ class MessageDecision(TypedDict, total=False):
     message: str
     reasoning: str
     human_reply: str   # B-1: 人間（市民）へ直接返す内容。空文字なら直接応答しない
+    human_reply_to: Optional[int]  # Phase0: どの市民の声(1-based番号)に応えたか。曖昧一致を避ける
 
 
 def _default_governance() -> Dict[str, Any]:
@@ -346,6 +351,47 @@ class Agent:
                     out.append(msg)
         return out
 
+    def displayed_unanswered_messages(self) -> List[Dict]:
+        """プロンプトに番号つきで提示する未応答の声（human_reply_to の対象と一致させる）。"""
+        return self.pending_human_messages()[-HUMAN_UNANSWERED_DISPLAY:]
+
+    @staticmethod
+    def _content_bigrams(text: str) -> set:
+        s = "".join((text or "").split())
+        return set(s[i:i + 2] for i in range(len(s) - 1))
+
+    def _content_overlap(self, a: str, b: str) -> float:
+        """日本語向けの粗い char-bigram Jaccard 類似度（0.0〜1.0）。"""
+        ba, bb = self._content_bigrams(a), self._content_bigrams(b)
+        if not ba or not bb:
+            return 0.0
+        return len(ba & bb) / len(ba | bb)
+
+    def resolve_answered_human(self, reply_text: str,
+                               reply_to_index: Optional[int]) -> Tuple[Optional[Dict], str]:
+        """human_reply がどの市民の声に応えたかを解決する。
+        従来の pending[-1] 決め打ち（応答が偶然どの声に当たるかで salience バケットが揺れる
+        アーティファクト）を廃し、(1) LLMが明示した番号 → (2) 内容一致 → (3) 直近フォールバック
+        の順で解決し、採用方法を返す（分析側で信頼度別にフィルタできる）。
+        """
+        pending = self.pending_human_messages()
+        if not pending:
+            return None, "none"
+        displayed = pending[-HUMAN_UNANSWERED_DISPLAY:]
+        # (1) LLMが明示した 1-based 番号（提示リストへのインデックス）
+        if isinstance(reply_to_index, int) and 1 <= reply_to_index <= len(displayed):
+            return displayed[reply_to_index - 1], "index"
+        # (2) 返答内容と最も一致する未応答の声
+        best, best_score = None, 0.0
+        for m in pending:
+            s = self._content_overlap(reply_text or "", m.get("content", ""))
+            if s > best_score:
+                best, best_score = m, s
+        if best is not None and best_score >= CONTENT_MATCH_THRESHOLD:
+            return best, "content"
+        # (3) フォールバック（低信頼: 直近の未応答）
+        return pending[-1], "fallback_recent"
+
     _HUMAN_CAT_LABEL = {
         "complaint": "苦情", "thanks": "感謝", "request": "要求",
         "question": "質問", "appeal": "訴え",
@@ -355,15 +401,15 @@ class Agent:
         """B-1: 自分に向けられた人間の未応答の声を提示する。
         ※ force-by-weight は温存。何が応答に値するかは agent の判断に委ね、一律に重く扱わない。
         """
-        pending = self.pending_human_messages()
-        if not pending:
+        displayed = self.displayed_unanswered_messages()
+        if not displayed:
             return ""
         lines = ["\n=== あなたに向けられた人間（市民）の声（まだ直接は応えていない） ==="]
-        for msg in pending[-3:]:
+        for i, msg in enumerate(displayed, start=1):
             label = self._HUMAN_CAT_LABEL.get(msg.get("category", ""), "")
             tag = f"[{label}]" if label else ""
-            lines.append(f"- {tag} 「{msg.get('content', '')}」")
-        lines.append("（この人に直接応えてもよいし、応えなくてもよい。判断はあなたに委ねる。）")
+            lines.append(f"[{i}] {tag} 「{msg.get('content', '')}」")
+        lines.append("（この人に直接応えてもよいし、応えなくてもよい。応えるなら、上の番号を human_reply_to に入れる。判断はあなたに委ねる。）")
         return "\n".join(lines) + "\n"
 
     def _build_event_section(self, event_info: Optional[List[Dict]]) -> str:
@@ -474,6 +520,7 @@ class Agent:
             )
             human_reply_field = (
                 '\n    "human_reply": "あなたに声を向けた人間（市民）への直接の返答。応えないなら空文字（日本語）",'
+                '\n    "human_reply_to": "上の市民の声のうち応えた番号（1,2,...）。応えないなら空文字",'
             )
         else:
             job_text = (
@@ -682,10 +729,23 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
                     "message": message,
                     "reasoning": parsed.get("reasoning", ""),
                     "human_reply": human_reply,
+                    "human_reply_to": self._parse_reply_to(parsed.get("human_reply_to")),
                 }
             except json.JSONDecodeError as e:
                 logger.debug(f"JSON parsing failed: {response[:100]}... Error: {e}")
-        return {"message": "", "reasoning": response[:FALLBACK_REASONING_LENGTH], "human_reply": ""}
+        return {"message": "", "reasoning": response[:FALLBACK_REASONING_LENGTH],
+                "human_reply": "", "human_reply_to": None}
+
+    @staticmethod
+    def _parse_reply_to(raw: Any) -> Optional[int]:
+        """human_reply_to を 1-based int に正規化。空文字/非数値は None。"""
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.strip().isdigit():
+            return int(raw.strip())
+        return None
 
     def parse_action_response(self, response: str) -> ActionDecision:
         json_str = self._extract_json_from_text(response)
