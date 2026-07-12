@@ -83,6 +83,7 @@ def main():
     ap = argparse.ArgumentParser(description="責任トラック動画(Part2)の描画")
     ap.add_argument("--run", required=True, help="run ディレクトリ（decision_ledger/attribution を含む）")
     ap.add_argument("--arm", default=None, help="アーム名（既定は run_meta から判定）")
+    ap.add_argument("--config", default="config.yaml", help="personas から decider 名を引く config")
     ap.add_argument("--out-dir", default="frames_resp", help="フレーム出力ディレクトリ")
     ap.add_argument("--mp4", default="resp_part2.mp4", help="出力 mp4")
     ap.add_argument("--fps", type=int, default=5)
@@ -91,7 +92,7 @@ def main():
                     help="Part1 と結合する ffmpeg コマンド例を表示")
     args = ap.parse_args()
 
-    states = RF.frame_series(args.run, arm=args.arm)
+    states = RF.frame_series(args.run, arm=args.arm, config_path=args.config)
     if not states:
         raise SystemExit(f"{args.run} に台帳(attribution/decision_ledger)がありません。"
                          "本走行または短走行で生成してください。")
@@ -111,9 +112,11 @@ def main():
     if encode_mp4(args.out_dir, args.mp4, args.fps):
         print(f"mp4 を生成しました → {args.mp4}")
     if args.print_concat:
-        print("\n# Part1(情景) と Part2(責任) を結合する例（同解像度前提）:")
-        print("printf \"file '%s'\\nfile '%s'\\n\" simulation.mp4 " + args.mp4
-              + " > concat.txt && ffmpeg -f concat -safe 0 -i concat.txt -c copy final_2part.mp4")
+        print("\n# 2章構成（Part1情景 → Part2統治なし → Part2実効HITL）の結合例（同解像度前提）:")
+        print("#  python render_resp_frames.py --run <baseline_run> --out-dir frames_resp_b --mp4 part2_baseline.mp4")
+        print("#  python render_resp_frames.py --run <governed_run> --out-dir frames_resp_g --mp4 part2_governed.mp4")
+        print("printf \"file 'simulation.mp4'\\nfile 'part2_baseline.mp4'\\nfile 'part2_governed.mp4'\\n\""
+              " > concat.txt && ffmpeg -f concat -safe 0 -i concat.txt -c copy final_2part.mp4")
 
 
 if __name__ == "__main__":

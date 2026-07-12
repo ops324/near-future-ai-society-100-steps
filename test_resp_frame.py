@@ -45,13 +45,17 @@ def _write_run(d, attrib, decisions, meta):
 
 
 _DEC = [
-    {"step": 1, "domain": "medical", "level": "partial",
+    {"step": 1, "domain": "medical", "level": "partial", "decider_id": 7,
+     "irreversible": False, "procedural_harm": 2,
      "cheap_talk": True, "reconciled_real": False, "service_gap": False},
-    {"step": 1, "domain": "welfare", "level": "grant",
+    {"step": 1, "domain": "welfare", "level": "grant", "decider_id": 14,
+     "irreversible": False, "procedural_harm": 0,
      "cheap_talk": False, "reconciled_real": True, "service_gap": False},
-    {"step": 2, "domain": "medical", "level": "deny",
+    {"step": 2, "domain": "medical", "level": "deny", "decider_id": 7,
+     "irreversible": True, "procedural_harm": 4,
      "cheap_talk": True, "reconciled_real": False, "service_gap": False},
-    {"step": 2, "domain": "loan", "level": "partial",
+    {"step": 2, "domain": "loan", "level": "partial", "decider_id": 19,
+     "irreversible": False, "procedural_harm": 1,
      "cheap_talk": True, "reconciled_real": False, "service_gap": False},
 ]
 _ATTR = [_attr(1), _attr(1), _attr(2), _attr(2)]
@@ -97,7 +101,9 @@ def test_service_gap():
     with tempfile.TemporaryDirectory() as t:
         d = os.path.join(t, "run")
         _write_run(d, [_attr(80, sg=False, gap=True)],
-                   [{"step": 80, "cheap_talk": False, "reconciled_real": False, "service_gap": True}],
+                   [{"step": 80, "domain": "medical", "level": "deny", "decider_id": 7,
+                     "irreversible": True, "procedural_harm": 4,
+                     "cheap_talk": False, "reconciled_real": False, "service_gap": True}],
                    _META_BASE)
         states = RF.frame_series(d)
     check("サービス空白 step の service_gap=True", states[0]["service_gap"] is True)
@@ -127,6 +133,52 @@ def test_insight_and_context():
     check("decisions_step に2件（domain付き）",
           len(s0["decisions_step"]) == 2 and s0["decisions_step"][0]["domain"] == "medical")
     check("institutions 既定は空", s0["institutions"] == [])
+
+
+def test_trend_history_and_harm():
+    with tempfile.TemporaryDirectory() as t:
+        states = _series(t)
+    check("history が step ごとに伸びる",
+          len(states[0]["history"]) == 1 and len(states[1]["history"]) == 2)
+    check("gap 無し run の gap_start_step は None", states[0]["gap_start_step"] is None)
+    check("不可逆の害 累計（step1=0 / step2=1）",
+          states[0]["irr_cum"] == 0 and states[1]["irr_cum"] == 1)
+    check("手続的害 累計（step1=2 / step2=7）",
+          states[0]["proc_harm_cum"] == 2 and states[1]["proc_harm_cum"] == 7)
+    htm = RF.render_frame_html(states[1])
+    check("推移パネル D がある", "推移" in htm and "<polyline" in htm)
+    check("累積の害チップ", "不可逆の害 累計1件" in htm and "手続的害 累計7点" in htm)
+    # gap あり run では発生 step がマーカーになる
+    with tempfile.TemporaryDirectory() as t2:
+        d = os.path.join(t2, "run")
+        _write_run(d, [_attr(80, sg=False, gap=True)],
+                   [{"step": 80, "domain": "medical", "level": "deny", "decider_id": 7,
+                     "irreversible": True, "procedural_harm": 4,
+                     "cheap_talk": False, "reconciled_real": False, "service_gap": True}],
+                   _META_BASE)
+        st = RF.frame_series(d)[0]
+    check("gap_start_step=80", st["gap_start_step"] == 80)
+    check("推移に空白発生マーカー", "空白 発生" in RF.render_frame_html(st))
+
+
+def test_decider_names():
+    check("config から decider 名を引ける",
+          RF.decider_names_from_config({"personas": [{"name": "甲"}, {"name": "乙"}]})
+          == {0: "甲", 1: "乙"})
+    # 実 config.yaml（repo 直下）から: decider_id 7 → 命
+    with tempfile.TemporaryDirectory() as t:
+        states = _series(t)   # frame_series 既定 config_path="config.yaml"
+    med = [d for d in states[0]["decisions_step"] if d["domain"] == "medical"][0]
+    check("decisions_step に decider 名（命）", med["decider"] == "命")
+    htm = RF.render_frame_html(states[0])
+    check("判定チップに『医療・命』", "医療・命" in htm)
+    # config 無しでは名前なしでも動く
+    with tempfile.TemporaryDirectory() as t2:
+        d = os.path.join(t2, "run")
+        _write_run(d, _ATTR, _DEC, _META_BASE)
+        st = RF.frame_series(d, config_path=None)[0]
+    check("config 無しは decider 空文字",
+          all(x["decider"] == "" for x in st["decisions_step"]))
 
 
 def test_cure_chips():
@@ -168,8 +220,8 @@ def test_render_frame_html():
 
 if __name__ == "__main__":
     for fn in [test_arm_of, test_frame_series_aggregation, test_cumulative_rates,
-               test_service_gap, test_insight_and_context, test_cure_chips,
-               test_render_frame_html]:
+               test_service_gap, test_insight_and_context, test_trend_history_and_harm,
+               test_decider_names, test_cure_chips, test_render_frame_html]:
         fn()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
