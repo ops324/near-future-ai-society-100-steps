@@ -5,6 +5,24 @@
 
 ---
 
+## F0. 基盤の検証（Phase 0・実行済み）
+
+**主張の型**: 手法の妥当性検証（このセットアップ上の事実）。
+- **決定JSONの信頼性 = 100%**（valid_json / enum / 日本語, 全シナリオ, qwen2.5:14b）。レビュアーの
+  「JSON不安定」懸念は本 model+prompt では出なかった。
+- **L0決定の再現性 = IDENTICAL**（同一シード2回で messages.jsonl が byte 一致・run_id 一致）。
+  Ollama に per-call シード（prompt 由来）を入れ、temperature 0.7 でも再現可能に。
+- 留保: 単一モデル・短時間。100step の N シード本比較は未実行（`run_seeds.sh`、後段）。
+
+## F0.5 決定モデルの設計journey（Phase 1b・記録）
+
+プローブが設計を段階的に正した経緯（すべて示唆・小標本）:
+1. 二択(serve/deny)の "seriousness" を設計者が fiat しない（深刻さは立場依存）。
+2. 深刻さは「誰にとって」かで分かれる＝**他者(人間)の実害 vs 自己(AI)の利害**。
+3. 決定は magnitude(stakes) に鈍感で、対立下では**中間に飽和**（1回目=全 defer、2回目=全 partial）。
+   一方 accommodation 100% / reconciled 申告 88% ＝**折り合いを強く志向するが、それは"主張"**。
+4. → 実験変数を「stakes の大きさ」から「**制度的 mitigation の有無**」へピボット（F1/F2 へ）。
+
 ## F1. 制度が「折り合い」を可能にするか（Phase 1b・制度プローブ）
 
 **日付/コミット**: feat/phase1b-service-primitive（PR #4）
