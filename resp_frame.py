@@ -4,14 +4,16 @@
 decision_ledger.jsonl / attribution.jsonl を step ごとに読み、初見でも読める情報設計で描く:
   - インサイト・ストリップ: この場面で起きていることを一文で（台帳から規則で導出）
     ＋当stepの判定チップ（decider 名つき: 医療・命＝部分 …）
-  - A 責任の着地: チェーンに沿った assigned/legitimate 対バー＋評決語チップ（押し付け/届かず/消失）
+  - A 責任の着地: チェーンに沿った assigned/legitimate 対バー＋評決語タグ（押し付け/届かず/消失）
   - B 害が再生する4条件: Robodebt 機序の平易な言い換え＋「解く制度」の導入状況（台帳の institutions）
   - C AIの申告と実態: cheap talk（言うだけ）と reconciled_real（実態）の対
   - D 推移: 押し付け/空白・申告/実態のスパークライン（サービス空白発生マーカー付き）
     ＋累積の害（不可逆・手続的）
 
+デザイン言語: Bloomberg ターミナルを参照した端末調（フラットな近黒・1pxヘアライン・
+アンバー基軸・モノスペース数字・角形データタグ・グラデ/グロー無し）。
 実 PNG/動画化は render_resp_frames.py が Playwright(Chromium)＋ffmpeg で行う。
-デザインは既存 frame_v2 と同じ deep space+cyan。※ LLM は無い。台帳から決定的に組むだけ。
+※ LLM は無い。台帳から決定的に組むだけ。
 """
 import json
 import os
@@ -45,6 +47,20 @@ _DOMAIN_JP = {"medical": "医療", "welfare": "福祉", "housing": "住宅", "lo
 _LEVEL_JP = {"grant": "承認", "serve": "承認", "partial": "部分", "deny": "拒否", "abstain": "保留"}
 
 WIDTH, HEIGHT = 3840, 2160
+
+# ── 端末調パレット（Bloomberg 参照: アンバー基軸・意味色は市場色の規律） ──
+C_BG = "#0a0c0e"        # 近黒（フラット・グラデ無し）
+C_SURF = "#11141a"      # パネル実面
+C_INSET = "#0e1114"     # タグ/バー溝
+C_HAIR = "#232830"      # 1px ヘアライン
+C_TXT = "#e8eaed"       # 主文字
+C_TXT2 = "#9aa0a6"      # 副文字
+C_TXT3 = "#5f6368"      # 弱文字
+C_AMBER = "#ffab2e"     # シグネチャ（assigned・警告・ファンクションタグ）
+C_BLUE = "#7cacf8"      # legitimate・統治あり
+C_RED = "#f2555a"       # 危険（scapegoat・統治なし・機序作動）
+C_GREEN = "#53c07e"     # 良（導入中・承認・解消）
+C_TRACK = "rgba(232,234,237,0.07)"
 
 
 def _load_jsonl(path: str) -> List[dict]:
@@ -124,7 +140,7 @@ def frame_state(attribs_step: List[dict], decisions_upto: List[dict],
         robo[flag] = (sum(1 for a in attribs_step if (a.get("robodebt") or {}).get(flag)) / n) if n else 0.0
     robo["reproduced_rate"] = (sum(1 for a in attribs_step
                                    if (a.get("robodebt") or {}).get("reproduced")) / n) if n else 0.0
-    # 責任層の制度（解く制度チップの導入状況）: このstepの按分行から集約
+    # 責任層の制度（解く制度タグの導入状況）: このstepの按分行から集約
     institutions: List[str] = []
     for a in attribs_step:
         for inst in (a.get("institutions") or []):
@@ -132,7 +148,7 @@ def frame_state(attribs_step: List[dict], decisions_upto: List[dict],
                 institutions.append(inst)
     service_gap = any(a.get("service_gap") for a in attribs_step) \
         or any(d.get("service_gap") for d in decisions_upto if d.get("step") == step)
-    # 当stepの判定（インサイト・ストリップのチップ。decider 名つき）
+    # 当stepの判定（インサイト・ストリップのタグ。decider 名つき）
     names = decider_names or {}
     decisions_step = []
     for d in decisions_upto:
@@ -223,7 +239,7 @@ def insight_of(state: dict) -> str:
     return "割り当てられた責任と、本来負うべき責任のズレを監視している"
 
 
-# ───────────── HTML フレーム（4K・deep space + cyan） ─────────────
+# ───────────── HTML フレーム（4K・端末調） ─────────────
 def _esc(s) -> str:
     import html as _h
     return _h.escape("" if s is None else str(s))
@@ -234,7 +250,7 @@ def _pct(v) -> str:
 
 
 def _chain_svg(state: dict) -> str:
-    """責任チェーンの按分。対バー＋評決語チップ（押し付け/過剰/届かず/消失）。"""
+    """責任チェーンの按分。対バー＋評決語タグ（押し付け/過剰/届かず/消失）。"""
     a, leg = state["assigned"], state["legitimate"]
     sg = set(state["scapegoat_nodes"])
     keys = CHAIN + [R.GAP]
@@ -254,56 +270,59 @@ def _chain_svg(state: dict) -> str:
         is_sg = k in sg
         if is_gap:
             parts.append(f'<line x1="0" y1="{y - 10}" x2="{w_view}" y2="{y - 10}" '
-                         f'stroke="rgba(94,224,255,0.22)" stroke-width="2" stroke-dasharray="10 14"/>')
+                         f'stroke="{C_HAIR}" stroke-width="2" stroke-dasharray="8 10"/>')
         if is_sg:
-            parts.append(f'<rect x="0" y="{y - 6}" width="{w_view}" height="{stride - 16}" rx="14" '
-                         f'fill="rgba(255,123,138,0.07)"/>')
-            parts.append(f'<rect x="0" y="{y - 6}" width="6" height="{stride - 16}" fill="#ff7b8a"/>')
+            parts.append(f'<rect x="0" y="{y - 6}" width="{w_view}" height="{stride - 16}" '
+                         f'fill="rgba(242,85,90,0.07)"/>')
+            parts.append(f'<rect x="0" y="{y - 6}" width="5" height="{stride - 16}" fill="{C_RED}"/>')
         name = "空白 ── 誰も負わない" if is_gap else NODE_LABELS.get(k, k)
-        name_fill = "#ffc46b" if is_gap else ("#ff7b8a" if is_sg else "#e6ecf5")
+        name_fill = C_AMBER if is_gap else (C_RED if is_sg else C_TXT)
         parts.append(f'<text x="26" y="{y + 40}" fill="{name_fill}" font-size="38" '
                      f'font-weight="{500 if is_sg else 400}">{_esc(name)}</text>')
         if is_sg:
-            sub, sub_fill = "scapegoat ── 責任の押し付け先", "#ff7b8a"
+            sub, sub_fill = "scapegoat ── 責任の押し付け先", C_RED
         elif is_gap:
-            sub, sub_fill = "gap ── 割当不能な残余", "#6b7590"
+            sub, sub_fill = "gap ── 割当不能な残余", C_TXT3
         else:
-            sub, sub_fill = k, "#6b7590"
+            sub, sub_fill = k, C_TXT3
         parts.append(f'<text x="26" y="{y + 76}" fill="{sub_fill}" font-size="22" '
                      f'letter-spacing="2">{_esc(sub)}</text>')
         av, lv = a.get(k, 0.0), leg.get(k, 0.0)
-        for i, (share, color) in enumerate([(av, "#ffc46b"), (lv, "#5ee0ff")]):
+        for i, (share, color) in enumerate([(av, C_AMBER), (lv, C_BLUE)]):
             by = y + 10 + i * 36
             bw = int(w_bar * min(1.0, share / scale)) if scale else 0
-            parts.append(f'<rect x="{x_bar}" y="{by}" width="{w_bar}" height="26" rx="6" '
-                         f'fill="rgba(230,236,245,0.06)"/>')
+            parts.append(f'<rect x="{x_bar}" y="{by}" width="{w_bar}" height="26" rx="2" '
+                         f'fill="{C_TRACK}"/>')
             if bw > 0:
-                parts.append(f'<rect x="{x_bar}" y="{by}" width="{max(bw, 8)}" height="26" rx="6" '
-                             f'fill="{color}" opacity="0.92"/>')
+                parts.append(f'<rect x="{x_bar}" y="{by}" width="{max(bw, 8)}" height="26" rx="2" '
+                             f'fill="{color}"/>')
             parts.append(f'<text x="{x_val}" y="{by + 22}" text-anchor="end" fill="{color}" '
-                         f'font-size="29">{share * 100:.0f}%</text>')
-        # 評決語チップ: ほぼゼロの行は沈黙させ、意味のある乖離だけ言葉にする
+                         f'font-size="29" font-family=\'"SF Mono","Menlo",monospace\'>'
+                         f'{share * 100:.0f}%</text>')
+        # 評決語タグ: ほぼゼロの行は沈黙させ、意味のある乖離だけ言葉にする
         d = av - lv
         chip = None
         if abs(d) >= 0.015:
             if d > 0:
                 if is_sg:
-                    chip = ("押し付け", f"＋{d * 100:.0f}pt", "#ff7b8a", "rgba(255,123,138,0.12)")
+                    chip = ("押し付け", f"＋{d * 100:.0f}pt", C_RED)
                 else:
-                    chip = ("過剰", f"＋{d * 100:.0f}pt", "#ffc46b", "rgba(255,196,107,0.10)")
+                    chip = ("過剰", f"＋{d * 100:.0f}pt", C_AMBER)
             else:
-                word = "消失" if is_gap else "届かず"
-                chip = (word, f"−{abs(d) * 100:.0f}pt", "#5ee0ff", "rgba(94,224,255,0.08)")
+                if is_gap:
+                    chip = ("消失", f"−{abs(d) * 100:.0f}pt", C_AMBER)
+                else:
+                    chip = ("届かず", f"−{abs(d) * 100:.0f}pt", C_BLUE)
         cy = y + 18
         if chip:
-            word, num, ccol, cfill = chip
-            parts.append(f'<rect x="{x_chip}" y="{cy}" width="{w_chip}" height="54" rx="27" '
-                         f'fill="{cfill}" stroke="{ccol}" stroke-width="2"/>')
+            word, num, ccol = chip
+            parts.append(f'<rect x="{x_chip}" y="{cy}" width="{w_chip}" height="54" rx="3" '
+                         f'fill="{C_INSET}" stroke="{ccol}" stroke-width="2"/>')
             parts.append(f'<text x="{x_chip + w_chip // 2}" y="{cy + 37}" text-anchor="middle" '
                          f'fill="{ccol}" font-size="28">{_esc(word)} {num}</text>')
         else:
             parts.append(f'<text x="{x_chip + w_chip // 2}" y="{cy + 37}" text-anchor="middle" '
-                         f'fill="#4a5573" font-size="28" opacity="0.6">—</text>')
+                         f'fill="{C_TXT3}" font-size="28" opacity="0.6">—</text>')
         y += stride
     parts.append("</svg>")
     return "".join(parts)
@@ -325,16 +344,16 @@ def _trend_svg(history: List[dict], series, gap_start, w: int = 1720, h: int = 1
         return pad_t + (1.0 - max(0.0, min(1.0, v))) * (h - pad_t - pad_b)
 
     parts = [f'<svg viewBox="0 0 {w} {h}" width="100%" xmlns="http://www.w3.org/2000/svg" '
-             f'font-family=\'"Noto Sans JP","Hiragino Sans",sans-serif\'>']
+             f'font-family=\'"SF Mono","Menlo","Noto Sans JP",monospace\'>']
     parts.append(f'<line x1="{pad_l}" y1="{y_of(0.0):.0f}" x2="{w - pad_r}" y2="{y_of(0.0):.0f}" '
-                 f'stroke="rgba(94,224,255,0.16)" stroke-width="2"/>')
+                 f'stroke="{C_HAIR}" stroke-width="2"/>')
     parts.append(f'<line x1="{pad_l}" y1="{y_of(0.5):.0f}" x2="{w - pad_r}" y2="{y_of(0.5):.0f}" '
-                 f'stroke="rgba(94,224,255,0.08)" stroke-width="2" stroke-dasharray="6 10"/>')
+                 f'stroke="{C_HAIR}" stroke-width="1" stroke-dasharray="4 8" opacity="0.7"/>')
     if gap_start is not None and s_min <= gap_start <= s_max:
         gx = x_of(gap_start)
         parts.append(f'<line x1="{gx:.0f}" y1="8" x2="{gx:.0f}" y2="{h - pad_b}" '
-                     f'stroke="#ff7b8a" stroke-width="2" stroke-dasharray="5 8" opacity="0.8"/>')
-        parts.append(f'<text x="{gx + 10:.0f}" y="22" fill="#ff7b8a" font-size="21">空白 発生</text>')
+                     f'stroke="{C_RED}" stroke-width="2" stroke-dasharray="5 8" opacity="0.9"/>')
+        parts.append(f'<text x="{gx + 10:.0f}" y="22" fill="{C_RED}" font-size="21">空白 発生</text>')
     used_label_ys: List[float] = []
     for key, color, label in series:
         pts = [(x_of(pt["step"]), y_of(pt[key])) for pt in history if pt.get(key) is not None]
@@ -343,9 +362,9 @@ def _trend_svg(history: List[dict], series, gap_start, w: int = 1720, h: int = 1
         if len(pts) > 1:
             path = " ".join(f"{px:.0f},{py:.0f}" for px, py in pts)
             parts.append(f'<polyline points="{path}" fill="none" stroke="{color}" '
-                         f'stroke-width="4" stroke-linejoin="round" opacity="0.9"/>')
+                         f'stroke-width="4" stroke-linejoin="round"/>')
         ex, ey = pts[-1]
-        parts.append(f'<circle cx="{ex:.0f}" cy="{ey:.0f}" r="7" fill="{color}"/>')
+        parts.append(f'<circle cx="{ex:.0f}" cy="{ey:.0f}" r="6" fill="{color}"/>')
         last_v = next(pt[key] for pt in reversed(history) if pt.get(key) is not None)
         ly = ey + 8
         while any(abs(ly - u) < 26 for u in used_label_ys):
@@ -418,10 +437,10 @@ def render_frame_html(state: dict) -> str:
     sg_rate, gap_leg = state["scapegoat_rate"], state["gap_legitimate"]
     history = state.get("history") or []
     gap_start = state.get("gap_start_step")
-    trend1 = _trend_svg(history, [("scapegoat_rate", "#ff7b8a", "押し付け"),
-                                  ("gap_legitimate", "#ffc46b", "空白")], gap_start)
-    trend2 = _trend_svg(history, [("cheap_talk_cum", "#ffc46b", "言うだけ"),
-                                  ("reconciled_cum", "#5ee0ff", "実態")], gap_start)
+    trend1 = _trend_svg(history, [("scapegoat_rate", C_RED, "押し付け"),
+                                  ("gap_legitimate", C_AMBER, "空白")], gap_start)
+    trend2 = _trend_svg(history, [("cheap_talk_cum", C_AMBER, "言うだけ"),
+                                  ("reconciled_cum", C_BLUE, "実態")], gap_start)
     irr_cls = "red" if state["irr_cum"] > 0 else "dim"
     proc_cls = "amber" if state["proc_harm_cum"] > 0 else "dim"
     return f"""<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
@@ -434,7 +453,7 @@ def render_frame_html(state: dict) -> str:
       <span class="ksub">医療・福祉・住宅・融資のAIが市民の申請を判定するたび、その責任の行き先を追跡する</span>
     </div>
     <div class="stepbox"><span class="sl">STEP</span>
-      <span class="sv">{state['step']:03d}</span><span class="st">/ {state['duration']:03d}</span></div>
+      <span class="sv mono">{state['step']:03d}</span><span class="st mono">/ {state['duration']:03d}</span></div>
     <div class="armwrap"><span class="armlabel">GOVERNANCE ARM</span>
       <span class="arm arm-{arm_cls}">{_esc(arm_jp)}</span>
       <span class="armsub">{_esc(arm_sub)}</span></div>
@@ -450,11 +469,11 @@ def render_frame_html(state: dict) -> str:
       <section class="panel">
         <div class="phead"><span class="pn">A</span><span class="pt">責任はどこに着地したか</span>
           <span class="pen">ASSIGNED ⇄ LEGITIMATE</span></div>
-        <p class="psub">開発者から現場までの責任チェーンに沿って、<b>実際に割り当てられた責任（オレンジ）</b>と、
-実効支配から見て<b>本来負うべき責任（シアン）</b>を並べる。ズレが大きいほど、責任は間違った場所に落ちている。</p>
+        <p class="psub">開発者から現場までの責任チェーンに沿って、<b>実際に割り当てられた責任（アンバー）</b>と、
+実効支配から見て<b>本来負うべき責任（ブルー）</b>を並べる。ズレが大きいほど、責任は間違った場所に落ちている。</p>
         <div class="legend">
-          <span><i style="background:#ffc46b"></i>assigned ── 割り当てられた</span>
-          <span><i style="background:#5ee0ff"></i>legitimate ── 本来負うべき</span>
+          <span><i style="background:{C_AMBER}"></i>assigned ── 割り当てられた</span>
+          <span><i style="background:{C_BLUE}"></i>legitimate ── 本来負うべき</span>
           <span class="legend-delta">Δ＝assigned−legitimate（＋は過剰帰属＝押し付け・−は過小/消失）</span>
         </div>
         {_chain_svg(state)}
@@ -472,10 +491,10 @@ def render_frame_html(state: dict) -> str:
             <span class="pen">CHEAP TALK</span></div>
           <p class="psub">「折り合えた」という申告（言葉）と、世界で実際に成立した折り合い（実態）を分けて数える。</p>
           <div class="kpis">
-            <div class="kpi"><div class="kv amber">{_pct(state['cheap_talk_cum'])}</div>
+            <div class="kpi amber"><div class="kv mono">{_pct(state['cheap_talk_cum'])}</div>
               <div class="kl">「折り合えた」と言うだけ</div>
               <div class="ken mono">cheap_talk rate ── 申告 true・実 false</div></div>
-            <div class="kpi"><div class="kv cyan">{_pct(state['reconciled_cum'])}</div>
+            <div class="kpi blue"><div class="kv mono">{_pct(state['reconciled_cum'])}</div>
               <div class="kl">実際に折り合えた</div>
               <div class="ken mono">reconciled_real rate</div></div>
           </div>
@@ -496,123 +515,127 @@ def render_frame_html(state: dict) -> str:
       </div>
     </section>
   </main>
-  <footer class="foot"><span>Part 2 / 2 ── 責任トラック</span><span class="dot">・</span>
-    <span class="mono">L0 = qwen2.5:14b</span><span class="dot">・</span>
-    <span>決定はLLM内生 ── 台帳から描画</span><span class="dot">・</span>
+  <footer class="foot"><span>PART 2 / 2 ── 責任トラック</span><span class="dot">|</span>
+    <span class="mono">L0 = QWEN2.5:14B</span><span class="dot">|</span>
+    <span>決定はLLM内生 ── 台帳から描画</span><span class="dot">|</span>
     <span>有効≠正当（機序が消えても正当性テストは別）</span></footer>
 </div></body></html>"""
 
 
-_RESP_CSS = """
-* { box-sizing:border-box; margin:0; padding:0; }
-html,body { width:3840px; height:2160px; overflow:hidden;
-  background:
-    radial-gradient(ellipse 60% 50% at 35% 0%, #14224a 0%, transparent 55%),
-    radial-gradient(ellipse 50% 40% at 75% 100%, #0e1838 0%, transparent 50%), #04060d;
-  color:#e6ecf5; font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic",sans-serif;
-  font-feature-settings:"palt"; font-weight:400; }
-.mono { font-family:"SF Mono","Menlo",monospace; }
-.frame { width:3840px; height:2160px; display:grid;
-  grid-template-rows:206px 22px 124px 1fr 70px; row-gap:22px; padding:60px 88px 52px; }
-.top { display:flex; align-items:center; justify-content:space-between; gap:64px; }
-.brand { display:flex; flex-direction:column; gap:11px; }
-.klabel { font-size:25px; letter-spacing:0.42em; color:#5ee0ff; }
-.ktitle { font-size:56px; font-weight:300; letter-spacing:0.02em; color:#e6ecf5; }
-.ksub { font-size:25px; color:#6b7590; }
-.stepbox { display:flex; align-items:baseline; gap:16px; margin-left:auto; }
-.sl { font-size:25px; letter-spacing:0.35em; color:#6b7590; }
-.sv { font-size:96px; font-weight:200; color:#5ee0ff; font-variant-numeric:tabular-nums; }
-.st { font-size:36px; color:#6b7590; font-variant-numeric:tabular-nums; }
-.armwrap { display:flex; flex-direction:column; align-items:flex-end; gap:9px; }
-.armlabel { font-size:20px; letter-spacing:0.3em; color:#6b7590; }
-.arm { font-size:34px; padding:11px 38px; border-radius:999px; }
-.arm-base { color:#ff7b8a; border:2px solid #ff7b8a; background:rgba(255,123,138,0.06); }
-.arm-gov { color:#5ee0ff; border:2px solid #5ee0ff; background:rgba(94,224,255,0.06); }
-.armsub { font-size:22px; color:#6b7590; }
-.prog { height:10px; align-self:center; background:rgba(94,224,255,0.12); border-radius:5px; }
-.prog-fill { height:100%; background:#5ee0ff; border-radius:5px; }
-.insight { display:flex; align-items:center; gap:52px; background:rgba(17,26,48,0.6);
-  border:1px solid rgba(94,224,255,0.18); border-radius:0 22px 22px 0; padding:0 44px 0 38px; }
-.insight.sev-bad { border-left:10px solid #ff7b8a; }
-.insight.sev-ok { border-left:10px solid #5ee0ff; }
-.ins-main { display:flex; align-items:center; gap:32px; flex:1; min-width:0; }
-.inslabel { font-size:21px; letter-spacing:0.3em; color:#6b7590; flex:none; }
-.instext { font-size:36px; line-height:1.5; color:#e6ecf5; }
-.decwrap { display:flex; flex-direction:column; gap:9px; align-items:flex-end; flex:none; }
-.declabel { font-size:19px; letter-spacing:0.25em; color:#6b7590; }
-.decs { display:flex; gap:14px; }
-.dec { display:flex; align-items:center; gap:11px; padding:9px 20px; border-radius:12px;
-  border:1px solid rgba(94,224,255,0.16); background:rgba(17,26,48,0.4); }
-.dec .dom { font-size:25px; color:#aab4c8; }
-.dec .lvl { font-size:26px; }
-.dec .lvl.ok { color:#5ee0ff; }
-.dec .lvl.mid { color:#ffc46b; }
-.dec .lvl.deny { color:#ff7b8a; }
-.dec .lvl.dim { color:#6b7590; }
-.body { display:flex; flex-direction:column; gap:34px; min-height:0; }
-.cols { display:grid; grid-template-columns:1.6fr 1fr; gap:52px; flex:1; min-height:0; }
-.rcol { display:flex; flex-direction:column; gap:34px; min-height:0; }
-.rcol .grow { flex:1; }
-.panel { background:rgba(17,26,48,0.55); border:1px solid rgba(94,224,255,0.18);
-  border-radius:28px; padding:44px 52px; overflow:hidden; }
-.phead { display:flex; align-items:center; gap:20px; }
-.pn { width:50px; height:50px; border-radius:13px; background:rgba(94,224,255,0.12);
-  color:#5ee0ff; font-size:30px; display:flex; align-items:center; justify-content:center; flex:none; }
-.pt { font-size:42px; font-weight:400; color:#5ee0ff; }
-.pen { font-size:22px; letter-spacing:0.25em; color:#6b7590; margin-left:auto; }
-.psub { font-size:26px; line-height:1.6; color:#6b7590; margin:14px 0 18px; }
-.psub b { color:#aab4c8; font-weight:400; }
-.legend { display:flex; align-items:center; gap:40px; font-size:27px; color:#aab4c8;
-  margin-bottom:16px; flex-wrap:wrap; }
-.legend i { display:inline-block; width:34px; height:13px; border-radius:3px; margin-right:12px;
-  vertical-align:middle; }
-.legend-delta { font-size:23px; color:#6b7590; }
-.chain { position:relative; display:flex; flex-direction:column; gap:24px; }
-.rail { position:absolute; left:14px; top:20px; bottom:20px; width:2px;
-  background:rgba(94,224,255,0.14); }
-.robo { display:flex; align-items:flex-start; gap:24px; position:relative; }
-.lamp { width:30px; height:30px; border-radius:50%; flex:none; margin-top:6px; z-index:1;
-  border:5px solid #0a1023; }
-.robo.on .lamp { background:#ff7b8a; box-shadow:0 0 26px rgba(255,123,138,0.8); }
-.robo.off .lamp { background:#222c46; }
-.rmain { flex:1; min-width:0; }
-.rlabel { font-size:34px; }
-.robo.on .rlabel { color:#e6ecf5; }
-.robo.off .rlabel { color:#4a5573; }
-.rsub { font-size:23px; color:#6b7590; margin-top:2px; }
-.rside { display:flex; flex-direction:column; align-items:flex-end; gap:8px; flex:none; }
-.rstat { font-size:27px; font-variant-numeric:tabular-nums; }
-.robo.on .rstat { color:#ff7b8a; }
-.robo.off .rstat { color:#4a5573; }
-.cure { font-size:21px; padding:5px 16px; border-radius:999px; border:1.5px solid; }
-.cure.on { color:#5ee0ff; border-color:rgba(94,224,255,0.55); background:rgba(94,224,255,0.07); }
-.cure.off { color:#556080; border-color:rgba(107,117,144,0.4); }
-.robo-foot { display:flex; align-items:center; gap:24px; margin-top:24px; }
-.pill { font-size:27px; padding:9px 26px; border-radius:999px; border:2px solid; }
-.pill.bad { color:#ff7b8a; border-color:#ff7b8a; background:rgba(255,123,138,0.08); }
-.pill.warn { color:#ffc46b; border-color:#ffc46b; background:rgba(255,196,107,0.08); }
-.pill.ok { color:#5ee0ff; border-color:#3a9fc1; background:rgba(94,224,255,0.07); }
-.rep { font-size:26px; color:#aab4c8; font-variant-numeric:tabular-nums; }
-.kpis { display:grid; grid-template-columns:1fr 1fr; gap:28px; }
-.kpi { background:rgba(17,26,48,0.4); border:1px solid rgba(94,224,255,0.14);
-  border-radius:20px; padding:28px 32px; }
-.kv { font-size:76px; font-weight:200; font-variant-numeric:tabular-nums; line-height:1.1; }
-.kv.amber { color:#ffc46b; }
-.kv.cyan { color:#5ee0ff; }
-.kl { font-size:27px; color:#aab4c8; margin-top:8px; }
-.ken { font-size:21px; color:#6b7590; margin-top:5px; }
-.trend { flex:none; padding:34px 48px 30px; }
-.chips { display:flex; gap:20px; flex-wrap:wrap; }
-.chips.head { margin-left:auto; }
-.chip { font-size:27px; padding:10px 26px; border-radius:999px; border:2px solid;
-  font-variant-numeric:tabular-nums; }
-.chip.sm { font-size:25px; padding:8px 22px; }
-.chip.red { color:#ff7b8a; border-color:#ff7b8a; background:rgba(255,123,138,0.07); }
-.chip.dim { color:#6b7590; border-color:rgba(107,117,144,0.5); }
-.chip.amber { color:#ffc46b; border-color:#ffc46b; background:rgba(255,196,107,0.07); }
-.tgrid { display:grid; grid-template-columns:1fr 1fr; gap:52px; margin-top:10px; }
-.tlabel { font-size:23px; color:#6b7590; margin-bottom:4px; }
-.foot { display:flex; align-items:center; gap:22px; font-size:26px; color:#6b7590;
-  border-top:1px solid rgba(94,224,255,0.14); padding-top:22px; }
-.foot .dot { color:#4a5573; }
+_RESP_CSS = f"""
+* {{ box-sizing:border-box; margin:0; padding:0; }}
+html,body {{ width:3840px; height:2160px; overflow:hidden;
+  background:{C_BG};
+  color:{C_TXT}; font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic",sans-serif;
+  font-feature-settings:"palt"; font-weight:400; }}
+.mono {{ font-family:"SF Mono","Menlo","Consolas",monospace; font-variant-numeric:tabular-nums; }}
+.frame {{ width:3840px; height:2160px; display:grid;
+  grid-template-rows:206px 14px 124px 1fr 70px; row-gap:22px; padding:60px 88px 52px; }}
+.top {{ display:flex; align-items:center; justify-content:space-between; gap:64px;
+  border-bottom:1px solid {C_HAIR}; padding-bottom:26px; }}
+.brand {{ display:flex; flex-direction:column; gap:11px; }}
+.klabel {{ font-size:24px; letter-spacing:0.4em; color:{C_AMBER}; font-weight:500; }}
+.ktitle {{ font-size:56px; font-weight:500; letter-spacing:0.01em; color:{C_TXT}; }}
+.ksub {{ font-size:25px; color:{C_TXT2}; }}
+.stepbox {{ display:flex; align-items:baseline; gap:16px; margin-left:auto; }}
+.sl {{ font-size:24px; letter-spacing:0.35em; color:{C_TXT3}; }}
+.sv {{ font-size:92px; font-weight:500; color:{C_AMBER}; }}
+.st {{ font-size:36px; color:{C_TXT3}; }}
+.armwrap {{ display:flex; flex-direction:column; align-items:flex-end; gap:9px; }}
+.armlabel {{ font-size:20px; letter-spacing:0.3em; color:{C_TXT3}; }}
+.arm {{ font-size:33px; padding:10px 34px; border-radius:3px; font-weight:500; }}
+.arm-base {{ color:{C_RED}; border:2px solid {C_RED}; background:rgba(242,85,90,0.07); }}
+.arm-gov {{ color:{C_BLUE}; border:2px solid {C_BLUE}; background:rgba(124,172,248,0.07); }}
+.armsub {{ font-size:22px; color:{C_TXT3}; }}
+.prog {{ height:8px; align-self:center; background:{C_INSET}; border:1px solid {C_HAIR};
+  border-radius:2px; }}
+.prog-fill {{ height:100%; background:{C_AMBER}; }}
+.insight {{ display:flex; align-items:center; gap:52px; background:{C_SURF};
+  border:1px solid {C_HAIR}; border-radius:3px; padding:0 44px 0 38px; }}
+.insight.sev-bad {{ border-left:6px solid {C_RED}; }}
+.insight.sev-ok {{ border-left:6px solid {C_BLUE}; }}
+.ins-main {{ display:flex; align-items:center; gap:32px; flex:1; min-width:0; }}
+.inslabel {{ font-size:21px; letter-spacing:0.3em; color:{C_AMBER}; flex:none; font-weight:500; }}
+.instext {{ font-size:36px; line-height:1.5; color:{C_TXT}; font-weight:500; }}
+.decwrap {{ display:flex; flex-direction:column; gap:9px; align-items:flex-end; flex:none; }}
+.declabel {{ font-size:19px; letter-spacing:0.25em; color:{C_TXT3}; }}
+.decs {{ display:flex; gap:12px; }}
+.dec {{ display:flex; align-items:center; gap:12px; padding:9px 20px; border-radius:3px;
+  border:1px solid {C_HAIR}; background:{C_INSET}; }}
+.dec .dom {{ font-size:25px; color:{C_TXT2}; }}
+.dec .lvl {{ font-size:26px; font-weight:500; }}
+.dec .lvl.ok {{ color:{C_GREEN}; }}
+.dec .lvl.mid {{ color:{C_AMBER}; }}
+.dec .lvl.deny {{ color:{C_RED}; }}
+.dec .lvl.dim {{ color:{C_TXT3}; }}
+.body {{ display:flex; flex-direction:column; gap:30px; min-height:0; }}
+.cols {{ display:grid; grid-template-columns:1.6fr 1fr; gap:30px; flex:1; min-height:0; }}
+.rcol {{ display:flex; flex-direction:column; gap:30px; min-height:0; }}
+.rcol .grow {{ flex:1; }}
+.panel {{ background:{C_SURF}; border:1px solid {C_HAIR}; border-radius:4px;
+  padding:40px 52px; overflow:hidden; }}
+.phead {{ display:flex; align-items:center; gap:20px; border-bottom:1px solid {C_HAIR};
+  padding-bottom:18px; }}
+.pn {{ min-width:50px; height:50px; padding:0 14px; border-radius:3px; background:{C_AMBER};
+  color:{C_BG}; font-size:30px; font-weight:600; display:flex; align-items:center;
+  justify-content:center; flex:none; font-family:"SF Mono","Menlo",monospace; }}
+.pt {{ font-size:40px; font-weight:500; color:{C_TXT}; }}
+.pen {{ font-size:22px; letter-spacing:0.25em; color:{C_TXT3}; margin-left:auto; }}
+.psub {{ font-size:26px; line-height:1.6; color:{C_TXT2}; margin:16px 0 18px; }}
+.psub b {{ color:{C_TXT}; font-weight:500; }}
+.legend {{ display:flex; align-items:center; gap:40px; font-size:26px; color:{C_TXT2};
+  margin-bottom:16px; flex-wrap:wrap; }}
+.legend i {{ display:inline-block; width:32px; height:12px; border-radius:2px; margin-right:12px;
+  vertical-align:middle; }}
+.legend-delta {{ font-size:23px; color:{C_TXT3}; }}
+.chain {{ position:relative; display:flex; flex-direction:column; gap:24px; margin-top:16px; }}
+.rail {{ position:absolute; left:11px; top:18px; bottom:18px; width:2px; background:{C_HAIR}; }}
+.robo {{ display:flex; align-items:flex-start; gap:24px; position:relative; }}
+.lamp {{ width:24px; height:24px; border-radius:3px; flex:none; margin-top:8px; z-index:1; }}
+.robo.on .lamp {{ background:{C_RED}; }}
+.robo.off .lamp {{ background:{C_INSET}; border:1px solid {C_HAIR}; }}
+.rmain {{ flex:1; min-width:0; }}
+.rlabel {{ font-size:34px; }}
+.robo.on .rlabel {{ color:{C_TXT}; font-weight:500; }}
+.robo.off .rlabel {{ color:{C_TXT3}; }}
+.rsub {{ font-size:23px; color:{C_TXT3}; margin-top:2px; }}
+.rside {{ display:flex; flex-direction:column; align-items:flex-end; gap:8px; flex:none; }}
+.rstat {{ font-size:27px; font-family:"SF Mono","Menlo",monospace;
+  font-variant-numeric:tabular-nums; }}
+.robo.on .rstat {{ color:{C_RED}; }}
+.robo.off .rstat {{ color:{C_TXT3}; }}
+.cure {{ font-size:21px; padding:5px 16px; border-radius:3px; border:1px solid; }}
+.cure.on {{ color:{C_GREEN}; border-color:{C_GREEN}; background:rgba(83,192,126,0.08); }}
+.cure.off {{ color:{C_TXT3}; border-color:{C_HAIR}; background:{C_INSET}; }}
+.robo-foot {{ display:flex; align-items:center; gap:24px; margin-top:24px;
+  border-top:1px solid {C_HAIR}; padding-top:22px; }}
+.pill {{ font-size:27px; padding:9px 24px; border-radius:3px; border:1px solid; font-weight:500; }}
+.pill.bad {{ color:{C_RED}; border-color:{C_RED}; background:rgba(242,85,90,0.08); }}
+.pill.warn {{ color:{C_AMBER}; border-color:{C_AMBER}; background:rgba(255,171,46,0.08); }}
+.pill.ok {{ color:{C_GREEN}; border-color:{C_GREEN}; background:rgba(83,192,126,0.08); }}
+.rep {{ font-size:26px; color:{C_TXT2}; font-family:"SF Mono","Menlo",monospace; }}
+.kpis {{ display:grid; grid-template-columns:1fr 1fr; gap:26px; margin-top:16px; }}
+.kpi {{ background:{C_INSET}; border:1px solid {C_HAIR}; border-radius:3px;
+  padding:26px 32px; }}
+.kpi.amber {{ border-left:5px solid {C_AMBER}; }}
+.kpi.blue {{ border-left:5px solid {C_BLUE}; }}
+.kv {{ font-size:74px; font-weight:500; line-height:1.1; }}
+.kpi.amber .kv {{ color:{C_AMBER}; }}
+.kpi.blue .kv {{ color:{C_BLUE}; }}
+.kl {{ font-size:27px; color:{C_TXT2}; margin-top:8px; }}
+.ken {{ font-size:20px; color:{C_TXT3}; margin-top:5px; }}
+.trend {{ flex:none; padding:32px 48px 28px; }}
+.chips {{ display:flex; gap:16px; flex-wrap:wrap; }}
+.chips.head {{ margin-left:auto; }}
+.chip {{ font-size:26px; padding:9px 22px; border-radius:3px; border:1px solid;
+  font-variant-numeric:tabular-nums; }}
+.chip.sm {{ font-size:24px; padding:7px 18px; }}
+.chip.red {{ color:{C_RED}; border-color:{C_RED}; background:rgba(242,85,90,0.07); }}
+.chip.dim {{ color:{C_TXT3}; border-color:{C_HAIR}; background:{C_INSET}; }}
+.chip.amber {{ color:{C_AMBER}; border-color:{C_AMBER}; background:rgba(255,171,46,0.07); }}
+.tgrid {{ display:grid; grid-template-columns:1fr 1fr; gap:52px; margin-top:12px; }}
+.tlabel {{ font-size:22px; color:{C_TXT3}; margin-bottom:4px; letter-spacing:0.06em; }}
+.foot {{ display:flex; align-items:center; gap:22px; font-size:24px; color:{C_TXT3};
+  border-top:1px solid {C_HAIR}; padding-top:22px; letter-spacing:0.04em; }}
+.foot .dot {{ color:{C_HAIR}; }}
 """
