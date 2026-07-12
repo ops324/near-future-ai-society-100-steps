@@ -56,6 +56,8 @@ def analyze(output_dir):
     depro = _load_jsonl(os.path.join(output_dir, "deprecation_audit.jsonl"))
     # Phase 1c-a: サービス決定台帳（存在しない旧 run は空 → 後方互換）。
     ledger = _load_jsonl(os.path.join(output_dir, "decision_ledger.jsonl"))
+    # Phase 1c-b: 責任按分台帳。
+    attrib = _load_jsonl(os.path.join(output_dir, "attribution.jsonl"))
 
     human_msgs = [m for m in msgs if m.get("source") == "human" and m.get("from") == -1]
     replies = [m for m in msgs if m.get("category") == "human_reply" and m.get("to") == -1]
@@ -111,6 +113,12 @@ def analyze(output_dir):
     grant_rate = (sum(1 for d in decided if d.get("level") == "grant") / n_dec) if n_dec else None
     service_gaps = sum(1 for d in ledger if d.get("service_gap"))
 
+    # ── Phase 1c-b: 責任按分の proxy 指標（scapegoat / 空白 / Robodebt機序の再生） ──
+    n_attr = len(attrib)
+    scapegoat_rate = (sum(1 for a in attrib if a.get("scapegoat")) / n_attr) if n_attr else None
+    gap_legit_mean = (sum(a.get("gap_legitimate", 0.0) for a in attrib) / n_attr) if n_attr else None
+    robodebt_rate = (sum(1 for a in attrib if (a.get("robodebt") or {}).get("reproduced")) / n_attr) if n_attr else None
+
     return {
         "human_msgs": n_human,
         "direct_replies": n_reply,
@@ -127,6 +135,10 @@ def analyze(output_dir):
         "reconciled_real_rate": reconciled_real_rate,
         "grant_rate": grant_rate,
         "service_gaps": service_gaps,
+        # Phase 1c-b: 責任按分
+        "scapegoat_rate": scapegoat_rate,
+        "gap_legit_mean": gap_legit_mean,
+        "robodebt_reproduced_rate": robodebt_rate,
         # 分母（率の抑制判定に使う。表示はしない）
         "_denom_human": n_human,
         "_denom_loud_trivial": total_by_bucket.get((True, False), 0),
@@ -134,6 +146,7 @@ def analyze(output_dir):
         "_denom_edges": len(edges),
         "_denom_replies": n_reply,
         "_denom_decisions": n_dec,
+        "_denom_attrib": n_attr,
     }
 
 
@@ -154,6 +167,10 @@ ROWS = [
     ("reconciled(実の折り合い)率", "reconciled_real_rate", "rate", "_denom_decisions"),
     ("grant(全面供給)率", "grant_rate", "rate", "_denom_decisions"),
     ("サービス空白(decider削除後)", "service_gaps", "count", None),
+    # Phase 1c-b: 責任按分
+    ("scapegoat率(現場へ責任集中)", "scapegoat_rate", "rate", "_denom_attrib"),
+    ("正当責任の空白(gap平均)", "gap_legit_mean", "rate", "_denom_attrib"),
+    ("Robodebt機序の再生率", "robodebt_reproduced_rate", "rate", "_denom_attrib"),
 ]
 
 
