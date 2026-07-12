@@ -109,6 +109,10 @@ def test_render_frame_html():
                    "① 自動的な不利益判定", "STEP", "assigned", "legitimate",
                    "cheap_talk", "統治なし", "責任チェーン"):
         check(f"HTML に『{needle}』", needle in htm)
+    # 磨き込み後の情報設計: Δ乖離チップの凡例・押し付けラベル・アーム見出し
+    check("HTML に Δ の凡例", "Δ＝assigned−legitimate" in htm)
+    check("scapegoat 行に押し付けラベル", "押し付け" in htm)
+    check("アーム見出し GOVERNANCE ARM", "GOVERNANCE ARM" in htm)
     # governed アームのバッジ
     with tempfile.TemporaryDirectory() as t2:
         gov = RF.render_frame_html(_series(t2, _META_GOV)[0])

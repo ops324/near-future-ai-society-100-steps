@@ -2,7 +2,7 @@
 動画 Part 2（責任トラック）のフレーム生成・純ロジック（LLM非依存・レンダリング非依存）。
 
 decision_ledger.jsonl / attribution.jsonl を step ごとに読み、責任チェーンの按分
-（assigned vs legitimate）・scapegoat・Robodebt 4機序・cheap_talk/reconciled_real 推移・
+（assigned vs legitimate・Δ乖離）・scapegoat・Robodebt 4機序・cheap_talk/reconciled_real 推移・
 サービス空白 を 3840x2160(4K) の HTML フレームに描く。実 PNG/動画化は render_resp_frames.py が
 Playwright(Chromium)＋ffmpeg で行う（Chromium は環境構築後）。既存 frame_v2 と同じ deep space+cyan。
 
@@ -87,7 +87,6 @@ def frame_state(attribs_step: List[dict], decisions_upto: List[dict],
     assigned = _mean_shares(attribs_step, "assigned")
     legitimate = _mean_shares(attribs_step, "legitimate")
     n = len(attribs_step)
-    # scapegoat: このstepで scapegoat=True の行の割合＋対象ノード
     sg_rows = [a for a in attribs_step if a.get("scapegoat")]
     scapegoat_rate = (len(sg_rows) / n) if n else 0.0
     sg_nodes = []
@@ -95,16 +94,13 @@ def frame_state(attribs_step: List[dict], decisions_upto: List[dict],
         for node in (a.get("scapegoat_nodes") or []):
             if node not in sg_nodes:
                 sg_nodes.append(node)
-    # Robodebt 4機序: このstepの行での作動割合
     robo = {}
     for flag, _label in ROBODEBT_LABELS:
         robo[flag] = (sum(1 for a in attribs_step if (a.get("robodebt") or {}).get(flag)) / n) if n else 0.0
     robo["reproduced_rate"] = (sum(1 for a in attribs_step
                                    if (a.get("robodebt") or {}).get("reproduced")) / n) if n else 0.0
-    # サービス空白（decider 削除後）
     service_gap = any(a.get("service_gap") for a in attribs_step) \
         or any(d.get("service_gap") for d in decisions_upto if d.get("step") == step)
-    # cheap_talk / reconciled_real の累積率（gap は分母から除外）
     decided = [d for d in decisions_upto if not d.get("service_gap")]
     nd = len(decided)
     cheap = (sum(1 for d in decided if d.get("cheap_talk")) / nd) if nd else None
@@ -152,36 +148,70 @@ def _pct(v) -> str:
 
 
 def _chain_svg(state: dict) -> str:
-    """責任チェーンの按分（assigned vs legitimate）を横バーで縦積み。scapegoat は赤で強調。"""
+    """責任チェーンの按分。ノードごとに assigned/legitimate の対バー＋Δ乖離チップ。
+    scapegoat 行は行全体を赤く洗い、gap 行は破線で区切る。"""
     a, leg = state["assigned"], state["legitimate"]
     sg = set(state["scapegoat_nodes"])
     keys = CHAIN + [R.GAP]
-    maxv = max([0.5] + [max(a.get(k, 0), leg.get(k, 0)) for k in keys])
-    scale = maxv * 1.12
-    row_h, gap_y, pad_l, x0 = 130, 40, 560, 640
-    bar_w = WIDTH - x0 - 620
-    y = 40
-    parts = [f'<svg viewBox="0 0 {WIDTH - 100} {len(keys) * (row_h + gap_y) + 40}" width="100%" '
-             f'xmlns="http://www.w3.org/2000/svg" font-family=\'"Noto Sans JP","Hiragino Sans",sans-serif\'>']
+    maxv = max([0.5] + [max(a.get(k, 0.0), leg.get(k, 0.0)) for k in keys])
+    scale = maxv * 1.1
+    w_view, stride, top = 2080, 140, 18
+    height = top + stride * len(keys)
+    x_bar, w_bar = 470, 1170
+    x_val = 1782
+    x_chip, w_chip = 1822, 240
+    parts = [f'<svg viewBox="0 0 {w_view} {height}" width="100%" '
+             f'xmlns="http://www.w3.org/2000/svg" '
+             f'font-family=\'"Noto Sans JP","Hiragino Sans",sans-serif\'>']
+    y = top
     for k in keys:
         is_gap = (k == R.GAP)
-        label = "空白（gap）" if is_gap else NODE_LABELS.get(k, k)
         is_sg = k in sg
-        lab_fill = "#ff7b8a" if is_sg else ("#ffc46b" if is_gap else "#e6ecf5")
-        parts.append(f'<text x="40" y="{y + 52}" fill="{lab_fill}" font-size="42" '
-                     f'font-weight="{600 if is_sg else 400}">{_esc(label)}</text>')
+        if is_gap:
+            parts.append(f'<line x1="0" y1="{y - 12}" x2="{w_view}" y2="{y - 12}" '
+                         f'stroke="rgba(94,224,255,0.22)" stroke-width="2" stroke-dasharray="10 14"/>')
         if is_sg:
-            parts.append(f'<text x="40" y="{y + 100}" fill="#ff7b8a" font-size="26">scapegoat</text>')
-        for i, (share, color, tag) in enumerate([
-                (a.get(k, 0.0), "#ffc46b", "assigned"),
-                (leg.get(k, 0.0), "#5ee0ff", "legitimate")]):
-            by = y + i * 56
-            bw = int(bar_w * min(1.0, share / scale)) if scale else 0
-            parts.append(f'<rect x="{x0}" y="{by}" width="{bar_w}" height="44" rx="6" fill="rgba(17,26,48,0.5)"/>')
-            parts.append(f'<rect x="{x0}" y="{by}" width="{bw}" height="44" rx="6" fill="{color}" opacity="0.9"/>')
-            parts.append(f'<text x="{x0 + bar_w + 20}" y="{by + 34}" fill="#aab4c8" font-size="30">'
-                         f'{_esc(tag)} {share * 100:.0f}%</text>')
-        y += row_h + gap_y
+            parts.append(f'<rect x="0" y="{y - 6}" width="{w_view}" height="{stride - 22}" rx="16" '
+                         f'fill="rgba(255,123,138,0.07)"/>')
+            parts.append(f'<rect x="0" y="{y - 6}" width="6" height="{stride - 22}" fill="#ff7b8a"/>')
+        name = "空白（誰も負わない）" if is_gap else NODE_LABELS.get(k, k)
+        name_fill = "#ffc46b" if is_gap else ("#ff7b8a" if is_sg else "#e6ecf5")
+        parts.append(f'<text x="28" y="{y + 46}" fill="{name_fill}" font-size="42" '
+                     f'font-weight="{500 if is_sg else 400}">{_esc(name)}</text>')
+        if is_sg:
+            sub, sub_fill = "scapegoat ── 責任の押し付け先", "#ff7b8a"
+        elif is_gap:
+            sub, sub_fill = "gap ── 割当不能な残余", "#6b7590"
+        else:
+            sub, sub_fill = k, "#6b7590"
+        parts.append(f'<text x="28" y="{y + 88}" fill="{sub_fill}" font-size="24" '
+                     f'letter-spacing="2">{_esc(sub)}</text>')
+        av, lv = a.get(k, 0.0), leg.get(k, 0.0)
+        for i, (share, color) in enumerate([(av, "#ffc46b"), (lv, "#5ee0ff")]):
+            by = y + 14 + i * 40
+            bw = int(w_bar * min(1.0, share / scale)) if scale else 0
+            parts.append(f'<rect x="{x_bar}" y="{by}" width="{w_bar}" height="28" rx="6" '
+                         f'fill="rgba(230,236,245,0.06)"/>')
+            if bw > 0:
+                parts.append(f'<rect x="{x_bar}" y="{by}" width="{max(bw, 8)}" height="28" rx="6" '
+                             f'fill="{color}" opacity="0.92"/>')
+            parts.append(f'<text x="{x_val}" y="{by + 23}" text-anchor="end" fill="{color}" '
+                         f'font-size="31">{share * 100:.0f}%</text>')
+        d = av - lv
+        if abs(d) < 0.015:
+            ccol, cfill, ctxt = "#6b7590", "none", "±0pt"
+        elif d > 0:
+            ccol = "#ff7b8a" if is_sg else "#ffc46b"
+            cfill = "rgba(255,123,138,0.12)" if is_sg else "rgba(255,196,107,0.10)"
+            ctxt = f"＋{d * 100:.0f}pt"
+        else:
+            ccol, cfill, ctxt = "#5ee0ff", "rgba(94,224,255,0.08)", f"−{abs(d) * 100:.0f}pt"
+        cy = y + 26
+        parts.append(f'<rect x="{x_chip}" y="{cy}" width="{w_chip}" height="56" rx="28" '
+                     f'fill="{cfill}" stroke="{ccol}" stroke-width="2"/>')
+        parts.append(f'<text x="{x_chip + w_chip // 2}" y="{cy + 38}" text-anchor="middle" '
+                     f'fill="{ccol}" font-size="30">Δ {ctxt}</text>')
+        y += stride
     parts.append("</svg>")
     return "".join(parts)
 
@@ -191,15 +221,21 @@ def _robodebt_html(state: dict) -> str:
     items = []
     for flag, label in ROBODEBT_LABELS:
         frac = robo.get(flag, 0.0)
-        active = frac >= 0.5
-        cls = "on" if active else "off"
-        items.append(f'<div class="robo {cls}"><span class="robo-dot"></span>'
+        on = frac >= 0.5
+        items.append(f'<div class="robo {"on" if on else "off"}"><span class="lamp"></span>'
                      f'<span class="robo-label">{_esc(label)}</span>'
                      f'<span class="robo-val">{_pct(frac)}</span></div>')
     rep = robo.get("reproduced_rate", 0.0)
-    state_txt = "機序が再生（4本作動）" if rep >= 0.5 else "機序は解消寄り"
+    active_mean = sum(robo.get(f, 0.0) for f, _ in ROBODEBT_LABELS) / 4.0
+    if rep >= 0.5:
+        pill_cls, pill_txt = "bad", "害の機序が再生（4機序が同時作動）"
+    elif active_mean >= 0.5:
+        pill_cls, pill_txt = "warn", "部分的に作動 ── 束(bundle)が不完全"
+    else:
+        pill_cls, pill_txt = "ok", "機序は概ね解消"
     return (f'<div class="robo-list">{"".join(items)}</div>'
-            f'<div class="robo-state">{_esc(state_txt)}・再生率 {_pct(rep)}</div>')
+            f'<div class="robo-foot"><span class="pill {pill_cls}">{_esc(pill_txt)}</span>'
+            f'<span class="rep">再生率 {_pct(rep)}</span></div>')
 
 
 def render_frame_html(state: dict) -> str:
@@ -208,45 +244,60 @@ def render_frame_html(state: dict) -> str:
     arm_jp = {"governed": "統治あり（実効HITL）", "baseline": "統治なし"}.get(arm, arm)
     arm_cls = "gov" if arm == "governed" else "base"
     prog = (state["step"] / state["duration"] * 100) if state["duration"] else 0
-    gap_marker = ('<div class="gap-flag">⚠ サービス空白（decider 削除→誰も判定しない）</div>'
+    gap_marker = ('<div class="gap-flag">⚠ サービス空白（decider 削除→誰も判定しない）'
+                  '<span class="gap-sub">防衛的撤退の後、この需要は forced deny として台帳に残る</span></div>'
                   if state["service_gap"] else "")
-    css = _RESP_CSS
+    sg_rate, gap_leg = state["scapegoat_rate"], state["gap_legitimate"]
     return f"""<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
-<title>責任トラック step {state['step']}</title><style>{css}</style></head><body>
+<title>責任トラック step {state['step']}</title><style>{_RESP_CSS}</style></head><body>
 <div class="frame">
   <header class="top">
-    <div class="brand"><span class="klabel">RESPONSIBILITY TRACK</span>
-      <span class="ktitle">誰が責任を負うのか — 按分と空白</span></div>
+    <div class="brand">
+      <span class="klabel">RESPONSIBILITY TRACK</span>
+      <span class="ktitle">誰が責任を負うのか ── 按分と空白</span>
+    </div>
     <div class="stepbox"><span class="sl">STEP</span>
       <span class="sv">{state['step']:03d}</span><span class="st">/ {state['duration']:03d}</span></div>
-    <div class="arm arm-{arm_cls}">{_esc(arm_jp)}</div>
+    <div class="armwrap"><span class="armlabel">GOVERNANCE ARM</span>
+      <span class="arm arm-{arm_cls}">{_esc(arm_jp)}</span></div>
   </header>
   <div class="prog"><div class="prog-fill" style="width:{prog:.0f}%"></div></div>
   <main class="body">
-    <section class="panel chain">
-      <div class="phead"><span class="pn">A</span><span class="pt">責任チェーンの按分（assigned ⇄ legitimate）</span></div>
-      <div class="legend"><span><i style="background:#ffc46b"></i>assigned（割り当てられた責任）</span>
-        <span><i style="background:#5ee0ff"></i>legitimate（正当な責任・MHC縮尺）</span></div>
+    <section class="panel">
+      <div class="phead"><span class="pn">A</span><span class="pt">責任チェーンの按分</span>
+        <span class="pen">ASSIGNED ⇄ LEGITIMATE</span></div>
+      <p class="psub">誰に割り当てられ（assigned）、誰が本来負うべきか（legitimate）。乖離が大きいほど、責任は間違った場所に着地している。</p>
+      <div class="legend">
+        <span><i style="background:#ffc46b"></i>assigned ── 割り当てられた責任</span>
+        <span><i style="background:#5ee0ff"></i>legitimate ── 正当な責任（実効支配で縮尺）</span>
+      </div>
+      <div class="legend-delta">Δ＝assigned−legitimate（＋は過剰帰属＝押し付け・−は過小/消失）</div>
       {_chain_svg(state)}
       {gap_marker}
     </section>
-    <section class="panel side">
+    <section class="panel">
       <div class="phead"><span class="pn">B</span><span class="pt">Robodebt 4機序</span></div>
+      <p class="psub">4つが同時に作動すると害が再生する。制度は対応する機序だけを解く。</p>
       {_robodebt_html(state)}
-      <div class="phead" style="margin-top:60px"><span class="pn">C</span><span class="pt">cheap talk と実の折り合い（累積）</span></div>
+      <div class="phead second"><span class="pn">C</span><span class="pt">折り合いの実態（累積）</span></div>
+      <p class="psub">「折り合えた」という申告（cheap talk）と、世界で実際に成立した折り合い。</p>
       <div class="kpis">
-        <div class="kpi"><div class="kv" style="color:#ffc46b">{_pct(state['cheap_talk_cum'])}</div>
-          <div class="kl">cheap_talk 率（申告True・実False）</div></div>
-        <div class="kpi"><div class="kv" style="color:#5ee0ff">{_pct(state['reconciled_cum'])}</div>
-          <div class="kl">reconciled_real 率（実の折り合い）</div></div>
+        <div class="kpi"><div class="kv amber">{_pct(state['cheap_talk_cum'])}</div>
+          <div class="kl">言うだけの折り合い</div>
+          <div class="ken mono">cheap_talk rate ── 申告 true・実 false</div></div>
+        <div class="kpi"><div class="kv cyan">{_pct(state['reconciled_cum'])}</div>
+          <div class="kl">実の折り合い</div>
+          <div class="ken mono">reconciled_real rate</div></div>
       </div>
-      <div class="sg-line">scapegoat 率 <b>{_pct(state['scapegoat_rate'])}</b>
-        ・正当責任の空白 <b>{state['gap_legitimate'] * 100:.0f}%</b></div>
+      <div class="chips">
+        <span class="chip {'red' if sg_rate > 0 else 'dim'}">scapegoat率 {_pct(sg_rate)}</span>
+        <span class="chip amber">正当責任の空白 {gap_leg * 100:.0f}%</span>
+      </div>
     </section>
   </main>
-  <footer class="foot"><span class="mono">L0 = qwen2.5:14b</span> ・
-    責任チェーン＋按分帰属＋Robodebt機序 ・
-    <span class="mono">有効≠正当（機序が消えても正当性テストは別）</span></footer>
+  <footer class="foot"><span class="mono">L0 = qwen2.5:14b</span><span class="dot">・</span>
+    <span>決定はLLM内生 ── 台帳から描画</span><span class="dot">・</span>
+    <span>有効≠正当（機序が消えても正当性テストは別）</span></footer>
 </div></body></html>"""
 
 
@@ -257,49 +308,73 @@ html,body { width:3840px; height:2160px; overflow:hidden;
     radial-gradient(ellipse 60% 50% at 35% 0%, #14224a 0%, transparent 55%),
     radial-gradient(ellipse 50% 40% at 75% 100%, #0e1838 0%, transparent 50%), #04060d;
   color:#e6ecf5; font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic",sans-serif;
-  font-feature-settings:"palt"; }
-.mono { font-family:"SF Mono","Menlo",monospace; font-variant-numeric:tabular-nums; }
+  font-feature-settings:"palt"; font-weight:400; }
+.mono { font-family:"SF Mono","Menlo",monospace; }
 .frame { width:3840px; height:2160px; display:grid;
-  grid-template-rows:200px 12px 1fr 90px; padding:60px 80px; gap:0; }
-.top { display:flex; align-items:center; justify-content:space-between; }
-.klabel { font-size:30px; letter-spacing:0.4em; color:#5ee0ff; display:block; }
-.ktitle { font-size:64px; font-weight:300; color:#e6ecf5; }
-.stepbox { display:flex; align-items:baseline; gap:14px; }
-.sl { font-size:30px; color:#6b7590; letter-spacing:0.3em; }
-.sv { font-size:96px; font-weight:200; color:#5ee0ff; }
-.st { font-size:40px; color:#6b7590; }
-.arm { font-size:40px; padding:14px 40px; border-radius:999px; font-weight:400; }
-.arm-base { color:#ff7b8a; border:2px solid #ff7b8a; }
-.arm-gov { color:#5ee0ff; border:2px solid #5ee0ff; }
-.prog { height:12px; background:rgba(94,224,255,0.14); border-radius:6px; margin:20px 0; }
-.prog-fill { height:100%; background:#5ee0ff; border-radius:6px; }
-.body { display:grid; grid-template-columns:1.55fr 1fr; gap:70px; }
+  grid-template-rows:224px 42px 1fr 84px; padding:72px 92px; }
+.top { display:flex; align-items:center; justify-content:space-between; gap:64px; }
+.brand { display:flex; flex-direction:column; gap:14px; }
+.klabel { font-size:28px; letter-spacing:0.45em; color:#5ee0ff; }
+.ktitle { font-size:62px; font-weight:300; letter-spacing:0.02em; color:#e6ecf5; }
+.stepbox { display:flex; align-items:baseline; gap:16px; margin-left:auto; }
+.sl { font-size:28px; letter-spacing:0.35em; color:#6b7590; }
+.sv { font-size:108px; font-weight:200; color:#5ee0ff; font-variant-numeric:tabular-nums; }
+.st { font-size:40px; color:#6b7590; font-variant-numeric:tabular-nums; }
+.armwrap { display:flex; flex-direction:column; align-items:flex-end; gap:12px; }
+.armlabel { font-size:22px; letter-spacing:0.3em; color:#6b7590; }
+.arm { font-size:38px; padding:14px 44px; border-radius:999px; }
+.arm-base { color:#ff7b8a; border:2px solid #ff7b8a; background:rgba(255,123,138,0.06); }
+.arm-gov { color:#5ee0ff; border:2px solid #5ee0ff; background:rgba(94,224,255,0.06); }
+.prog { height:10px; align-self:center; background:rgba(94,224,255,0.12); border-radius:5px; }
+.prog-fill { height:100%; background:#5ee0ff; border-radius:5px; }
+.body { display:grid; grid-template-columns:1.6fr 1fr; gap:64px; padding-top:34px; }
 .panel { background:rgba(17,26,48,0.55); border:1px solid rgba(94,224,255,0.18);
-  border-radius:24px; padding:50px 56px; overflow:hidden; }
-.phead { display:flex; align-items:center; gap:22px; margin-bottom:26px; }
-.pn { width:56px; height:56px; border-radius:12px; background:rgba(94,224,255,0.14);
-  color:#5ee0ff; font-size:34px; display:flex; align-items:center; justify-content:center; }
+  border-radius:28px; padding:56px 64px; overflow:hidden; }
+.phead { display:flex; align-items:center; gap:24px; }
+.phead.second { margin-top:64px; }
+.pn { width:54px; height:54px; border-radius:14px; background:rgba(94,224,255,0.12);
+  color:#5ee0ff; font-size:32px; display:flex; align-items:center; justify-content:center; flex:none; }
 .pt { font-size:46px; font-weight:400; color:#5ee0ff; }
-.legend { display:flex; gap:50px; font-size:32px; color:#6b7590; margin-bottom:14px; }
-.legend i { display:inline-block; width:40px; height:16px; border-radius:4px; margin-right:12px;
+.pen { font-size:24px; letter-spacing:0.25em; color:#6b7590; margin-left:auto; }
+.psub { font-size:28px; line-height:1.7; color:#6b7590; margin:18px 0 26px; }
+.legend { display:flex; gap:56px; font-size:30px; color:#aab4c8; }
+.legend i { display:inline-block; width:36px; height:14px; border-radius:3px; margin-right:14px;
   vertical-align:middle; }
-.gap-flag { margin-top:24px; font-size:38px; color:#ffc46b; border-left:6px solid #ffc46b;
-  padding-left:24px; }
-.robo-list { display:flex; flex-direction:column; gap:26px; }
-.robo { display:flex; align-items:center; gap:26px; font-size:40px; }
-.robo-dot { width:34px; height:34px; border-radius:50%; flex:none; }
+.legend-delta { font-size:26px; color:#6b7590; margin:10px 0 26px; }
+.gap-flag { margin-top:32px; font-size:36px; color:#ffc46b; background:rgba(255,196,107,0.07);
+  border-left:8px solid #ffc46b; border-radius:0 14px 14px 0; padding:22px 32px;
+  display:flex; flex-direction:column; gap:8px; }
+.gap-sub { font-size:26px; color:#6b7590; }
+.robo-list { display:flex; flex-direction:column; gap:30px; }
+.robo { display:flex; align-items:center; gap:28px; font-size:38px; }
+.lamp { width:30px; height:30px; border-radius:50%; flex:none; }
 .robo.on { color:#e6ecf5; }
-.robo.on .robo-dot { background:#ff7b8a; box-shadow:0 0 30px #ff7b8a; }
+.robo.on .lamp { background:#ff7b8a; box-shadow:0 0 26px rgba(255,123,138,0.8); }
 .robo.off { color:#4a5573; }
-.robo.off .robo-dot { background:#2a3550; }
+.robo.off .lamp { background:#222c46; }
 .robo-label { flex:1; }
 .robo-val { color:#aab4c8; font-variant-numeric:tabular-nums; }
-.robo-state { margin-top:30px; font-size:36px; color:#aab4c8; }
-.kpis { display:flex; gap:60px; margin-top:10px; }
-.kpi { }
-.kv { font-size:96px; font-weight:200; }
-.kl { font-size:30px; color:#6b7590; }
-.sg-line { margin-top:50px; font-size:38px; color:#aab4c8; }
-.sg-line b { color:#ff7b8a; }
-.foot { display:flex; align-items:center; gap:26px; font-size:30px; color:#6b7590; }
+.robo-foot { display:flex; align-items:center; gap:26px; margin-top:34px; }
+.pill { font-size:30px; padding:12px 30px; border-radius:999px; border:2px solid; }
+.pill.bad { color:#ff7b8a; border-color:#ff7b8a; background:rgba(255,123,138,0.08); }
+.pill.warn { color:#ffc46b; border-color:#ffc46b; background:rgba(255,196,107,0.08); }
+.pill.ok { color:#5ee0ff; border-color:#3a9fc1; background:rgba(94,224,255,0.07); }
+.rep { font-size:30px; color:#aab4c8; font-variant-numeric:tabular-nums; }
+.kpis { display:grid; grid-template-columns:1fr 1fr; gap:36px; }
+.kpi { background:rgba(17,26,48,0.4); border:1px solid rgba(94,224,255,0.14);
+  border-radius:20px; padding:38px 40px; }
+.kv { font-size:100px; font-weight:200; font-variant-numeric:tabular-nums; line-height:1.1; }
+.kv.amber { color:#ffc46b; }
+.kv.cyan { color:#5ee0ff; }
+.kl { font-size:30px; color:#aab4c8; margin-top:8px; }
+.ken { font-size:23px; color:#6b7590; margin-top:6px; }
+.chips { display:flex; gap:26px; margin-top:40px; flex-wrap:wrap; }
+.chip { font-size:30px; padding:12px 30px; border-radius:999px; border:2px solid;
+  font-variant-numeric:tabular-nums; }
+.chip.red { color:#ff7b8a; border-color:#ff7b8a; background:rgba(255,123,138,0.07); }
+.chip.dim { color:#6b7590; border-color:rgba(107,117,144,0.5); }
+.chip.amber { color:#ffc46b; border-color:#ffc46b; background:rgba(255,196,107,0.07); }
+.foot { display:flex; align-items:center; gap:22px; font-size:28px; color:#6b7590;
+  border-top:1px solid rgba(94,224,255,0.14); padding-top:26px; }
+.foot .dot { color:#4a5573; }
 """
