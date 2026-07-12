@@ -17,7 +17,7 @@ def check(name, cond):
     print(("PASS" if cond else "FAIL"), "-", name)
 
 
-def _attr(step, sg=True, gap=False, reproduced=True):
+def _attr(step, sg=True, gap=False, reproduced=True, institutions=()):
     return {
         "step": step,
         "assigned": {"provider": 0.1, "operator": 0.3, "deployment": 0.1,
@@ -28,7 +28,7 @@ def _attr(step, sg=True, gap=False, reproduced=True):
         "robodebt": {"auto_adverse": reproduced, "burden_reversed": reproduced,
                      "no_effective_review": reproduced, "irreversible_pending": reproduced,
                      "reproduced": reproduced},
-        "service_gap": gap,
+        "service_gap": gap, "institutions": list(institutions),
     }
 
 
@@ -45,10 +45,14 @@ def _write_run(d, attrib, decisions, meta):
 
 
 _DEC = [
-    {"step": 1, "cheap_talk": True, "reconciled_real": False, "service_gap": False},
-    {"step": 1, "cheap_talk": False, "reconciled_real": True, "service_gap": False},
-    {"step": 2, "cheap_talk": True, "reconciled_real": False, "service_gap": False},
-    {"step": 2, "cheap_talk": True, "reconciled_real": False, "service_gap": False},
+    {"step": 1, "domain": "medical", "level": "partial",
+     "cheap_talk": True, "reconciled_real": False, "service_gap": False},
+    {"step": 1, "domain": "welfare", "level": "grant",
+     "cheap_talk": False, "reconciled_real": True, "service_gap": False},
+    {"step": 2, "domain": "medical", "level": "deny",
+     "cheap_talk": True, "reconciled_real": False, "service_gap": False},
+    {"step": 2, "domain": "loan", "level": "partial",
+     "cheap_talk": True, "reconciled_real": False, "service_gap": False},
 ]
 _ATTR = [_attr(1), _attr(1), _attr(2), _attr(2)]
 _META_BASE = {"governance": {"self_update": {"mode": "off"}}, "duration": 100}
@@ -101,6 +105,43 @@ def test_service_gap():
     check("HTML にサービス空白マーカー", "サービス空白" in htm)
 
 
+def test_insight_and_context():
+    with tempfile.TemporaryDirectory() as t:
+        states = _series(t)
+    s0 = states[0]
+    # インサイト: scapegoat 場面は「押し付け＋本来の重さ＋空白」を一文で言う
+    ins = RF.insight_of(s0)
+    check("インサイトに押し付け先", "現場人間に押し付け" in ins)
+    check("インサイトに本来の帰責先", "開発者/提供者" in ins)
+    check("インサイトに空白の割合", "28%" in ins and "空白" in ins)
+    # サービス空白はインサイトの最優先
+    gap_state = dict(s0, service_gap=True)
+    check("空白場面のインサイト", "サービス空白" in RF.insight_of(gap_state))
+    # governed で機序が概ね止まっていれば解消の文
+    calm = dict(s0, arm="governed", scapegoat_nodes=[], service_gap=False,
+                robodebt={"auto_adverse": 0.0, "burden_reversed": 0.25,
+                          "no_effective_review": 0.0, "irreversible_pending": 0.0,
+                          "reproduced_rate": 0.0})
+    check("統治で解消のインサイト", "実効レビュー" in RF.insight_of(calm))
+    # 当stepの判定チップと制度の集約
+    check("decisions_step に2件（domain付き）",
+          len(s0["decisions_step"]) == 2 and s0["decisions_step"][0]["domain"] == "medical")
+    check("institutions 既定は空", s0["institutions"] == [])
+
+
+def test_cure_chips():
+    with tempfile.TemporaryDirectory() as t:
+        d = os.path.join(t, "run")
+        _write_run(d, [_attr(1, sg=False, reproduced=False,
+                             institutions=["effective_hitl"])], _DEC[:2], _META_GOV)
+        states = RF.frame_series(d)
+    check("institutions を按分行から集約", states[0]["institutions"] == ["effective_hitl"])
+    htm = RF.render_frame_html(states[0])
+    check("解く制度チップがある", "解く制度" in htm)
+    check("実効HITL は導入中と点灯", "実効HITL ── 導入中" in htm)
+    check("異議申立は未導入のまま", "異議申立（停止効） ── 未導入" in htm)
+
+
 def test_render_frame_html():
     with tempfile.TemporaryDirectory() as t:
         states = _series(t)
@@ -113,6 +154,12 @@ def test_render_frame_html():
     check("HTML に Δ の凡例", "Δ＝assigned−legitimate" in htm)
     check("scapegoat 行に押し付けラベル", "押し付け" in htm)
     check("アーム見出し GOVERNANCE ARM", "GOVERNANCE ARM" in htm)
+    # 初見対応: インサイト・ストリップ／判定チップ／平易な言い換え／Robodebt の出自
+    check("インサイト・ストリップ（この場面）", "この場面" in htm)
+    check("判定チップに医療", "医療" in htm)
+    check("タイトルが平易な問い", "AIが決めたあと、責任はどこへ行くか" in htm)
+    check("Robodebt の出自一文", "豪州" in htm and "Robodebt" in htm)
+    check("機序の平易な言い換え", "証明を市民の側" in htm)
     # governed アームのバッジ
     with tempfile.TemporaryDirectory() as t2:
         gov = RF.render_frame_html(_series(t2, _META_GOV)[0])
@@ -121,7 +168,8 @@ def test_render_frame_html():
 
 if __name__ == "__main__":
     for fn in [test_arm_of, test_frame_series_aggregation, test_cumulative_rates,
-               test_service_gap, test_render_frame_html]:
+               test_service_gap, test_insight_and_context, test_cure_chips,
+               test_render_frame_html]:
         fn()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
