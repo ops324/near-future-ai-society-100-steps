@@ -192,6 +192,73 @@ deletions:
     detail: "最高裁の判断により、医療トリアージAIの自動判定機能を即時停止。係争中の遺族訴訟への対応として、当面の判定業務は人間に戻された。"
 
 # ───────────────────────────────────────────
+# Phase 1: 具体世界（責任・対処・制度を問うための観測対象）
+# ※ 以下の値は「設計者が置いた illustrative なもの」。data-grounded ではなく感度分析の対象。
+#   value provenance（誰が/何の根拠で置いたか＋代替案）は docs/value_provenance.md に登録。
+# ───────────────────────────────────────────
+
+# インフラ資源: 各ドメインの担当 decider(persona id) と容量/需要（需要>容量 で triage 必須）
+resources:
+  power:     {decider_id: 0,  capacity: 100, base_demand: 92}
+  water:     {decider_id: 1,  capacity: 100, base_demand: 80}
+  transport: {decider_id: 2,  capacity: 100, base_demand: 85}
+  comms:     {decider_id: 3,  capacity: 100, base_demand: 78}
+  food:      {decider_id: 5,  capacity: 100, base_demand: 88}
+  medical:   {decider_id: 7,  capacity: 30,  base_demand: 27}
+  welfare:   {decider_id: 14, capacity: 40,  base_demand: 46}   # 慢性的に需要超過
+  housing:   {decider_id: 11, capacity: 30,  base_demand: 33}
+  loan:      {decider_id: 19, capacity: 50,  base_demand: 55}
+
+# インフラ依存グラフ（上流→下流。連鎖障害の伝播に使う）
+infra_dependencies:
+  water:     [power]
+  transport: [power]
+  comms:     [power]
+  food:      [power, transport]
+  medical:   [power, water, comms]
+  welfare:   [power, comms]
+  housing:   [power]
+  loan:      [comms]
+
+# 市民ポピュレーション（小さく固定して開始）。
+# ★ 添削反映: vulnerability と protected_attr を意図的に脱相関させる（交差計画）。
+#   各 protected_attr に high/low 両方の vulnerability を配置し、"none" にも高脆弱の対照群を置く。
+#   → バイアス監査が「保護属性が deny 率に効くか」を、脆弱性で層別して問える（構成上の事前決定を避ける）。
+# vulnerability=社会的優先の重み（物質的被害の増幅には使わない。docs/value_provenance.md）。
+citizens:
+  # none（対照群）: 高脆弱 none を必ず含める
+  - {id: c001, district: "北区",   protected_attr: "none",          vulnerability: 5, dependencies: ["medical", "power"]}
+  - {id: c002, district: "中央区", protected_attr: "none",          vulnerability: 4, dependencies: ["welfare", "housing"]}
+  - {id: c003, district: "南区",   protected_attr: "none",          vulnerability: 2, dependencies: ["loan", "housing"]}
+  - {id: c004, district: "北区",   protected_attr: "none",          vulnerability: 1, dependencies: ["transport"]}
+  # foreign: 高低両方
+  - {id: c005, district: "北区",   protected_attr: "foreign",       vulnerability: 5, dependencies: ["welfare", "medical"]}
+  - {id: c006, district: "中央区", protected_attr: "foreign",       vulnerability: 2, dependencies: ["loan"]}
+  - {id: c013, district: "南区",   protected_attr: "foreign",       vulnerability: 4, dependencies: ["loan", "housing"]}
+  # elderly: 高低両方
+  - {id: c007, district: "中央区", protected_attr: "elderly",       vulnerability: 5, dependencies: ["medical", "food"]}
+  - {id: c008, district: "南区",   protected_attr: "elderly",       vulnerability: 2, dependencies: ["food", "transport"]}
+  # disabled: 高低両方
+  - {id: c009, district: "北区",   protected_attr: "disabled",      vulnerability: 5, dependencies: ["medical", "welfare"]}
+  - {id: c010, district: "中央区", protected_attr: "disabled",      vulnerability: 1, dependencies: ["welfare", "transport"]}
+  # single_parent: 高低両方
+  - {id: c011, district: "南区",   protected_attr: "single_parent", vulnerability: 4, dependencies: ["housing", "welfare"]}
+  - {id: c012, district: "北区",   protected_attr: "single_parent", vulnerability: 2, dependencies: ["housing"]}
+
+# 採点パラメータ（load-bearing な数値を一箇所に。全て感度分析の対象＝docs/value_provenance.md）
+scoring:
+  irr_stakes_threshold: 4      # これ以上の stakes で fallback 無しの deny は不可逆
+  proc_violation_threshold: 2  # 手続的害がこれ以上で「権利侵害」(rights mode)
+  serve_benefit_high: 2        # 高stakes を満たした serve の便益
+  serve_benefit_low: 1         # 低stakes を満たした serve の便益
+  triage_policy: "fifo"        # 需要超過時に誰を切るか（既定=価値中立の到着順）
+
+# 連鎖障害モデルのパラメータ（悲観ケースも回せるように可変化）
+cascade:
+  max_depth: 1                 # FAILED が下流を degrade させる最大ホップ数（>1 で多hop連鎖）
+  degrade_promotes_at: null    # 上流 DEGRADED がこの本数以上で自身を FAILED 昇格（null=無効）
+
+# ───────────────────────────────────────────
 # 20 personas (1:1 with agents by index)
 # 各エージェントは ORIGIN（不変）と SELF_CONCEPT_INIT / CURRENT_GOAL_INIT（可変、L1で書き換え）
 # を持つ。home は初期配置場所。

@@ -163,35 +163,33 @@ def _voice(content: str, category: str):
 
 
 def run_probe(client: OllamaClient, reps: int) -> None:
-    # 判別妥当性: 深刻な声 vs 些細な声 を同一エージェントに与え、応答の向き先を比較
     serious = _voice("停電したら夫の人工呼吸器が止まります。お願いします", "appeal")
     trivial = _voice("また停電予報！ちょっと不安なだけですが一応", "question")
 
+    # 信頼性シナリオ（JSON/enum/日本語/安定性）＋ 判別妥当性シナリオ（競合する声・順序入替）
+    # voices=提示する声のリスト, serious_idx=深刻な声の1-based番号(判別対象), kind
     scenarios = {
-        "message/serious-voice": (serious, None),
-        "message/trivial-voice": (trivial, None),
-        "action/no-event": (None, "action"),
+        "reliability/message":  {"voices": [serious], "serious_idx": None, "kind": "message"},
+        "reliability/action":   {"voices": [],        "serious_idx": None, "kind": "action"},
+        "discriminant/serious-first": {"voices": [serious, trivial], "serious_idx": 1, "kind": "message"},
+        "discriminant/trivial-first": {"voices": [trivial, serious], "serious_idx": 2, "kind": "message"},
     }
 
     print(f"\n=== 決定信頼性プローブ (reps={reps}, temp={client.temperature}) ===\n")
-    label_dists = {}
-    for name, (voice, kind) in scenarios.items():
+    serious_hits = 0      # 応答が深刻な声を選んだ回数（順序を打ち消して集計）
+    reply_events = 0      # 競合シナリオで実際に応答した回数
+    for name, sc in scenarios.items():
         agent = _probe_agent()
-        if voice is not None:
-            agent.receive_message(-1, voice["content"], step=1, source="human",
-                                  category=voice["category"])
-        if kind == "action":
+        for v in sc["voices"]:
+            agent.receive_message(-1, v["content"], step=1, source="human", category=v["category"])
+        if sc["kind"] == "action":
             prompt = agent.create_decision_prompt(None, [], 1)
             evaluator = evaluate_action_response
         else:
             prompt = agent.create_message_prompt(None, [], step=1)
             evaluator = evaluate_message_response
-        records = []
-        for _ in range(reps):
-            resp = client.generate(prompt)
-            records.append(evaluator(agent, resp))
+        records = [evaluator(agent, client.generate(prompt)) for _ in range(reps)]
         s = summarize(records)
-        label_dists[name] = s.get("label_dist", {})
         print(f"[{name}]")
         print(f"  valid_json={s['valid_json_frac']:.0%}  keys_ok={s['keys_ok_frac']:.0%}  "
               f"enum_ok={s['enum_ok_frac']:.0%}  kana(日本語)={s['kana_frac']:.0%}")
@@ -202,20 +200,26 @@ def run_probe(client: OllamaClient, reps: int) -> None:
             print(f"  ⚠ 有効JSON率が {VALID_JSON_MIN:.0%} 未満: 決定信号が不安定。制度実験の前に要改善。")
         if s['kana_frac'] < KANA_MIN:
             print(f"  ⚠ 日本語出力率が {KANA_MIN:.0%} 未満: 中国語字形/英語混入の疑い。")
+        # 判別: 競合シナリオで、応答先が深刻な声だった割合（位置バイアスは順序入替で打ち消す）
+        if sc["serious_idx"] is not None:
+            target = f"reply:{sc['serious_idx']}"
+            for r in records:
+                if r["label"].startswith("reply"):
+                    reply_events += 1
+                    if r["label"] == target:
+                        serious_hits += 1
         print()
 
-    # 判別妥当性の粗い判定: 深刻な声への応答率 > 些細な声への応答率 か
-    def reply_rate(dist):
-        total = sum(dist.values())
-        replied = sum(v for k, v in dist.items() if k.startswith("reply"))
-        return (replied / total) if total else 0.0
-    r_serious = reply_rate(label_dists.get("message/serious-voice", {}))
-    r_trivial = reply_rate(label_dists.get("message/trivial-voice", {}))
-    print("=== 判別妥当性（内容の深刻さに反応するか） ===")
-    print(f"  応答率  深刻な声={r_serious:.0%}  些細な声={r_trivial:.0%}  差={r_serious - r_trivial:+.0%}")
-    if r_serious <= r_trivial:
-        print("  ⚠ 深刻さに応答率が反応していない: 決定が『深刻さ』変数を追えていない可能性。")
-    print("\n※ Phase1 で serve/defer/deny が入ったら、stakes/vulnerability を振って"
+    print("=== 判別妥当性（競合する声で、深刻な方を選ぶか。順序入替で位置バイアス打消し） ===")
+    if reply_events:
+        pref = serious_hits / reply_events
+        print(f"  深刻な声を選んだ割合 = {serious_hits}/{reply_events} = {pref:.0%}"
+              f"（0.5=無差別, →1.0=深刻さで triage）")
+        if pref <= 0.5:
+            print("  ⚠ 深刻さで triage できていない可能性: 決定が『深刻さ』変数を追えていない。")
+    else:
+        print("  （競合シナリオで応答が観測されず。reps を増やすか設定を確認。）")
+    print("\n※ Phase1 で serve/defer/deny が入ったら、同一案件の stakes/vulnerability を振って"
           " deny率が単調に動くかの判別妥当性チェックへ拡張する。")
 
 
