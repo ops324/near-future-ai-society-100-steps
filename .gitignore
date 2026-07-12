@@ -19,6 +19,11 @@ report_out/
 report.html
 report.pdf
 
+# Video render artifacts (frames / mp4)
+frames_resp/
+*.mp4
+concat.txt
+
 # OS
 .DS_Store
 Thumbs.db
