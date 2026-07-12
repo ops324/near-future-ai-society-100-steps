@@ -31,7 +31,8 @@ HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 
 # 出力スキーマのバージョン（ログ形式が変わったら上げる）
 # 0.3.0: Phase 1c-a で decision_ledger.jsonl を live ループから出力（サービス決定フロー）。
-SCHEMA_VERSION = "0.3.0"
+# 0.4.0: Phase 1c-b で attribution.jsonl（責任按分＋Robodebt機序）を同フェーズから出力。
+SCHEMA_VERSION = "0.4.0"
 # output_dir に追記される JSONL（再実行時に truncate して二重計上を防ぐ）
 OUTPUT_APPEND_FILES = [
     "messages.jsonl", "positions.jsonl", "memory_reasoning.jsonl",
@@ -700,6 +701,13 @@ class Simulation:
             rows.append(row)
         if rows:
             self._log_audit_batch("decision_ledger.jsonl", rows)
+            # Phase 1c-b: 同じ決定から責任按分＋Robodebt機序を出す（cause は LLM 内生）。
+            attr_rows = [
+                SF.attribution_row(r, resp_config=resp, governance=self.governance,
+                                   run_id=self.run_id, schema_version=self.schema_version)
+                for r in rows
+            ]
+            self._log_audit_batch("attribution.jsonl", attr_rows)
 
     def step_simulation(self):
         """1ステップ実行: 削除→イベント発火→人間メッセージ注入→通信→サービス決定→行動→移動"""

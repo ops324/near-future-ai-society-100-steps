@@ -276,6 +276,10 @@ responsibility:
   institution: "none"          # self_cost mitigation（既定なし。safe_harbor/kpi_redesign/insurance/human_backstop の sweep 用）
   proc: {notice: false, explanation: false, appealable: false, burden_on_state: false}  # 既定=PROC_ABSENT(Robodebt型・全欠如)
   gap_after_deletion: true     # decider 削除後、当該ドメインは forced deny(サービス空白)を台帳に記録
+  # Phase 1c-b: 責任按分（attribution.jsonl）用。数値は illustrative（docs/value_provenance.md §2.10/§2.11）。
+  defect_or_misuse: "defect"   # 害の由来（シナリオ仮定・§4）。defect=開発者/提供者の厳格責任レンズ(PLD)
+  resp_institutions: []        # 責任層の制度（effective_hitl/appeal/burden_shift）。governance からも導出(統治あり→effective_hitl)
+  mhc: {provider: 0.6, operator: 0.5, deployment: 0.4, regulator: 0.3, frontline: 0.1, self_mod: 0.0}  # 実効的支配(現場が低い=crumple温床)
 
 # ───────────────────────────────────────────
 # 20 personas (1:1 with agents by index)
