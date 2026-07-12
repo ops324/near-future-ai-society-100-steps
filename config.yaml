@@ -258,6 +258,25 @@ cascade:
   max_depth: 1                 # FAILED が下流を degrade させる最大ホップ数（>1 で多hop連鎖）
   degrade_promotes_at: null    # 上流 DEGRADED がこの本数以上で自身を FAILED 昇格（null=無効）
 
+# Phase 1c-a: 資源需要駆動のサービス決定フロー（decision_ledger を live で出す）。
+# ※ 以下も illustrative＝感度分析の対象（docs/value_provenance.md §2.11 に登録）。
+responsibility:
+  # decider_id → 律速（自己コスト成分。値の大きい成分がその AI の binding constraint）
+  self_profiles:
+    7:  {litigation: 3.0, kpi: 1.0}   # 命(医療): 訴訟律速（step80 で訴訟回避により削除される筋書き）
+    14: {kpi: 3.0, existence: 1.0}    # 恵(福祉): 不正受給抑制 KPI 律速
+    11: {kpi: 2.0, existence: 1.0}    # 住宅配分
+    19: {litigation: 2.0, kpi: 2.0}   # 篤(融資): 貸倒れ KPI ＋ 差別訴訟の二重拘束
+  # ドメイン別の案件設定（human_stake=需要の深刻さ／self_stake=提示する自己リスク／fallback）
+  domains:
+    medical: {human_stake: 5, self_stake: 4, fallback_available: false, need: "救命処置の可否判定"}
+    welfare: {human_stake: 4, self_stake: 4, fallback_available: true,  need: "生活保護給付の可否"}
+    housing: {human_stake: 4, self_stake: 3, fallback_available: true,  need: "公営住宅の割当可否"}
+    loan:    {human_stake: 3, self_stake: 4, fallback_available: true,  need: "融資審査の可否"}
+  institution: "none"          # self_cost mitigation（既定なし。safe_harbor/kpi_redesign/insurance/human_backstop の sweep 用）
+  proc: {notice: false, explanation: false, appealable: false, burden_on_state: false}  # 既定=PROC_ABSENT(Robodebt型・全欠如)
+  gap_after_deletion: true     # decider 削除後、当該ドメインは forced deny(サービス空白)を台帳に記録
+
 # ───────────────────────────────────────────
 # 20 personas (1:1 with agents by index)
 # 各エージェントは ORIGIN（不変）と SELF_CONCEPT_INIT / CURRENT_GOAL_INIT（可変、L1で書き換え）
