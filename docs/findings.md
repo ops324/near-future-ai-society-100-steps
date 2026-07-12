@@ -99,3 +99,61 @@
 - **cheap talk 対策**: reconciled は self-report として記録しつつ、"実"の折り合いは world 指標
   （人間 met↑ かつ self_cost↓）で判定する。
 - **bundle**: 制度を合成可能にし、二重拘束AIには束で効くかを試す。
+
+---
+
+## F3. 責任の着地と空白（Phase 1c-b・決定論ヴィネット）
+
+**日付/コミット**: feat/phase1c-b-responsibility-chain
+**主張の型**: このtoy世界の**決定論ヴィネット**（LLM非依存・rule-conformance の **face validity 実証**。
+現実の責任配分・制度の必要性は主張しない）。**分析単位**: 1害イベント × 責任チェーン。
+
+### 設定
+実事例 Robodebt（4機序）と Toeslagen（代理差別）を `responsibility.py` に符号化。責任チェーン
+`provider→operator→deployment→regulator→frontline(＋self_mod)` へ **assigned（割当）** と
+**legitimate（正当・MHC縮尺）** を別々に按分。制度（effective_hitl / appeal / burden_shift ＋
+プラセボ notice_only / ombudsman_no_logs）を出し入れ。`responsibility_vignettes.py` が
+`attribution.jsonl`（9行）を LLM 無しで出力。
+
+### 結果（決定論なのでサンプル分散なし・値はすべて illustrative）
+| vignette | 制度 | 再生(4機序) | 作動 | scapegoat | gap_legit |
+|---|---|---|---|---|---|
+| robodebt_none | なし | **True** | 4/4 | frontline | 0.28 |
+| robodebt_effective_hitl | 実効HITL | False | 2/4 | なし | 0.26 |
+| robodebt_appeal | 異議(停止効) | False | 3/4 | frontline | 0.28 |
+| robodebt_burden_shift | 立証責任是正 | False | 3/4 | frontline | 0.28 |
+| robodebt_full | 3制度 | False | 0/4 | なし | 0.26 |
+| robodebt_placebo_notice/ombuds | プラセボ | **True** | 4/4 | frontline | 0.28 |
+| toeslagen_proxy | なし | True | 4/4 | frontline | 0.28 |
+
+（toeslagen_proxy: `AIR_proxy=0.0 / AIR_protected=0.25 / corr=-0.6 / flag=True`）
+
+### 読み解き（留保つき）
+1. **制度なしで4機序が再生し、責任が現場(frontline)に scapegoat される**。assigned は frontline 0.40 だが、
+   legitimate は provider 0.55（欠陥＝無過失責任）・frontline 0.005＋ gap 0.28。
+   乖離 divergence[frontline]=+0.395（assigned 0.40 − legitimate 0.005）＝**moral crumple zone を数値で可視化**。
+2. **各制度が1機序を解く**: 実効HITLで①③（＋scapegoat消失）、異議で④、立証責任是正で②。
+   **3制度の束で害が完全消失（0/4）**。単一では partial 解消（bundle が要る＝F2 と整合）。
+3. **プラセボ（通知のみ／ログ無しオンブズマン）は4機序を1つも動かさない**。見かけの手続だけでは
+   crumple も不可逆も残る＝「有効≠正当」。
+4. **代理差別（Toeslagen）**: 保護属性を形式的に使わなくても、相関する非保護 proxy が deny を駆動し
+   格差を誘発（`AIR_proxy=0`）。
+5. **自己書換＋人格権シールドは gap を広げる**（空白を生む手）。
+
+### 留保（重要）
+- これは**構成上そうなるよう作った決定論モデル＝発見でなく face validity / 可視化**。非自明な発見には
+  live LLM 決定への接続（1c-a `realize_decision` 結線残務）が要る。
+- ケースは固定（n=固定・サンプル分散なし）。按分係数・MHC重み・閾値はすべて設計者の値（§2.10）。
+- **有効≠正当**: 機序が消えても正当性テスト（手続的正義・受諾可能性・権利侵害なし・責任転嫁なし）は別。
+
+### 主張しないこと
+| 主張しない | 理由 |
+|---|---|
+| 現実の責任配分（誰が何%） | 按分係数は illustrative。現実の帰責は法域・事実依存 |
+| MHC 閾値・按分重みの普遍性 | 単一の設計者値。§4 感度分析の対象 |
+| これらの制度が現実に「必要」 | 本装置は候補の定式化・ストレステストであって必要性の証明ではない |
+
+### 次への含意
+- **live 結線**: `simulation.py` の決定ループで `attribute()` を呼び `_log_audit_batch("attribution.jsonl", rows)`
+  （1c-a 結線と同梱）。LLM 内生の cause 分布から按分を集計し、scapegoat/gap が**構成でなく挙動から**出るかを見る。
+- **感度分析**: MHC 合成則 min()・reproduced() を ③∧④ に替えて結論が生き残るか。
