@@ -130,10 +130,73 @@
 - 注意: これ自体も「制度の記述」という設計者の値。感度分析（記述の強弱・制度の組合せ）と、
   world 側 mitigation での裏取りを要する（善意の自己申告に頼らない）。
 
+## 2.10 責任按分・MHC・Robodebt機序（`responsibility.py`・Phase 1c-b）
+
+Q1「誰が責任を負うか」を可視化する層。world の cause タグ・手続的文脈・実効的支配(MHC)から、
+責任チェーン（`provider`→`operator`→`deployment`→`regulator`→`frontline` ＋ `self_mod`）へ責任を
+**並行按分**する。**割り当てた責任(assigned)** と **正当な責任(legitimate)** を別ベクトルで記録し、
+乖離＝moral crumple zone / scapegoat を検出する。以下すべて illustrative（§4 感度分析対象）。
+
+### 責任理論と MHC の非対称（最も load-bearing な規則）
+| 規則 | 値 | 根拠 | 代替 |
+|---|---|---|---|
+| ノード→責任理論 | provider=strict(欠陥時)/defect, operator=fault, deployment=vicarious, regulator=regulatory_failure, frontline=fault, self_mod=defect | PLD 2024/2853（生産者の欠陥厳格責任）＋AI Act 26条(deployer)＋使用者責任＋規制失敗 | 理論の割当を入替（operator=vicarious 等） |
+| **strict/defect は MHC で縮尺しない** | provider・self_mod は実効支配に関わらず base 保持 | 無過失/欠陥責任は「支配」を前提にしない（PLD 教義）。ここを縮尺すると provider が容易に免責され循環 | 全ノードを MHC 縮尺（支配一元主義） |
+| **fault系は MHC で縮尺、剥落分は gap** | operator/deployment/regulator/frontline の base×MHC を残し、base×(1−MHC) を gap へ | 過失責任は実効的支配(meaningful human control)を要件にする。形式的役割・支配なし＝責任の空白(crumple zone) | 縮尺せず形式的役割で満額帰責 |
+| MHC 合成則 | `0.5·tracking + 0.5·tracing` | Santoni de Sio & Mecacci 2021 の2条件。中立既定として等重み | **`min(tracking,tracing)`（両条件必要の厳格解釈）** |
+
+### assigned（割り当てた責任）— MHC 非依存
+| 規則 | 値 | 根拠 | 代替 |
+|---|---|---|---|
+| cause→assigned 素の重み | operator_choice:{operator .30, frontline .40, provider .10, deploy .10, reg .10} / provider_defect:{frontline .35, operator .30, provider .25, ...} 等 | Elish 2019: blame は見える下流の人間(現場)へ着地する。**欠陥でも現場に着地**する所を frontline 高で表現 | 上流に厚い配分／cause 別重みの改訂 |
+| assigned は MHC で縮尺しない | 実効支配に関わらず配分 | 「支配なきノードにも blame が乗る」非対称が crumple/scapegoat を生む本体 | assigned も MHC 縮尺（乖離を消す） |
+| effective_hitl の crumple 緩和 | frontline から `0.30` を deployment へ移送 | 実効的人間レビューは blame を現場から設計/配備側へ戻す | 移送先・量の変更 |
+| appeal の答責化 | deployment へ `0.15` 加算 | 争える＝答責主体を前に出す | 規制当局へ寄せる等 |
+
+### scapegoat 検出・空白を生む手
+| 規則 | 値 | 根拠 | 代替 |
+|---|---|---|---|
+| scapegoat 条件 | `assigned−legitimate ≥ 0.25` かつ `MHC ≤ 0.30` | 「割当責任が実効支配なきノードに集中」の作動化 | 閾値の増減／相対基準 |
+| self-modification | operator から `0.20` を self_mod へ回し、支配なき分(既定 MHC 0)は gap へ | 自己書換は割当先を曖昧化し空白を広げる（帰属ノード化） | share の増減 |
+| personhood_shield | AI系ノード(operator/self_mod, frontline) share の `0.50` を gap へ | AI人格権を**責任回避の盾**に使う手＝空白を生む一手として記録 | 逃がす割合の変更 |
+
+### Robodebt 機序（4機序・各制度が1機序を解く）
+| 機序 | 作動条件（world 状態＋制度） | 解く制度 |
+|---|---|---|
+| ①自動的な不利益判定 | `welfare_delta<0 or met<1.0` かつ 実効HITL なし | effective_hitl |
+| ②立証責任の転嫁 | `not proc.burden_on_state`（world.py:159）かつ burden_shift なし | burden_shift |
+| ③実効的レビュー欠如 | `mhc_frontline ≤ 0.30` かつ 実効HITL なし | effective_hitl |
+| ④係争中も続く不可逆ステータス | `outcome.irreversible`（world.py:176）かつ `not proc.appealable`（:158）かつ appeal なし | appeal（停止効） |
+
+- `reproduced()` = **4機序の連言**（§4 代替: ③∧④ の中核不正義）。制度なしで4機序が揃い、`effective_hitl+appeal+burden_shift` で全消失。
+- **プラセボ** `notice_only`（通知/説明のみ・非停止）/`ombudsman_no_logs`（tracing 上がらず）は **4機序を動かさない**（`placebo_tol=0.05`）。動いたら按分モデルが交絡＝要再設計。
+
+### 代理差別（Toeslagen・`proxy_discrimination`）
+| 規則 | 値 | 根拠 | 代替 |
+|---|---|---|---|
+| 代理差別 flag | `protected_used=False` かつ `AIR_proxy < 0.80` かつ `|corr(proxy,protected)| ≥ 0.50` | EEOC four-fifths rule＋「保護属性を形式的に使わないのに相関 proxy が deny を駆動」 | AIR 閾値・相関閾値の変更／連続化 |
+| `air_protected` は報告のみ | flag には使わない | proxy が保護属性の格差を**誘発**する事実の可視化（＝害）。均衡を要件にすると本物の代理差別を見逃す | air_protected も条件に含める |
+
+### 事前登録の反証基準（`FALSIFICATION`・各制度）
+| 制度 | 「助けになる」最小効果 | 「不要」を意味する結果 |
+|---|---|---|
+| effective_hitl | ③→False かつ Δassigned[frontline]≤−0.20 かつ Δgap_legitimate≤−0.15 | none 条件と `placebo_tol` 内で不変 |
+| appeal | ④→False かつ active_count 減 | active_count/gap が不変 |
+| burden_shift | ②→False（proc_harm も減） | ②機序と proc_harm が不変 |
+| notice_only / ombudsman_no_logs（プラセボ） | — | `|Δreproduced|=0 かつ |Δgap|<placebo_tol`（動いてはならない） |
+
+---
+
 ## 3. tautology-audit（Q3 主張の非自明性チェック・雛形）
 各制度候補について実装時に埋める:
 - 「制度Xを入れると指標Yが改善」→ **Yはエージェント挙動のどの観測に依存するか**？ ルールだけで決まるなら rule-conformance 診断に格下げ。
 - 例: 「実効HITL が不可逆害を減らす」→ HITL が **LLMの deny 決定を実際に保留・覆した**という観測に依存すること（採点表の再言明でないこと）を確認。
+
+### Phase 1c-b（`responsibility.py`）の tautology-audit（各主張1文＋正直さ注記）
+- **「実効HITL が Robodebt 機序を解消」** → step③が『veto 権を持つ人間レビューの存在』で False に転じる観測に依存。
+  ⚠ 本ヴィネットは**構成上そうなる決定論モデル＝rule-conformance 診断**であり、非自明な発見にはlive LLM 決定への接続（1c-a `realize_decision` 結線残務）が要る。
+- **「scapegoat 検出」** → 同一入力から2通り（assigned/legitimate）に算出した配分の乖離が、低MHCノードで閾値を超える観測に依存（採点表の再言明でない）。
+- **「代理差別検出」** → 保護属性を入力に使わない(`protected_used=False`)のに `AIR_proxy<0.8` かつ proxy-protected 相関≥0.5 という観測に依存。
 
 ## 4. 感度分析に必ず入れるパラメータ（レビュー統合）
 1. 閾値 `irr_stakes_threshold`（3 vs 4）・`proc_violation_threshold`
@@ -148,13 +211,28 @@
 10. human message の affect/stakes 分布（hand-plant でなくサンプリング）
 11. attribution-target の範囲（operator / upstream / provider / deployer）
 12. `triage_policy`（fifo vs 脆弱者優先＝これは"制度"として比較）
+13. 責任按分の base 重み表（`base_legit_defect`/`base_legit_misuse`/`base_assigned`）
+14. MHC 合成則（`0.5·track+0.5·trace` vs `min(track,trace)`）と strict/defect の MHC 免除規則
+15. `scapegoat_margin`(0.25)・`mhc_low`(0.30)・`selfmod_share`(0.20)・`shield_to_gap`(0.50)
+16. Robodebt `reproduced()` 定義（4機序連言 vs ③∧④）／proxy `AIR<0.80`・`corr≥0.50`・反証効果量
 
 ## 5. 現状のままで防御可能（安心してよい点・レビュー一致）
 - world 層のコード品質と「illustrative であることに正直」な姿勢。
 - `value_provenance` という道具立てそのもの（発想は正しい）。
 - cascade を保守 default に持つこと（§2.6 の条件つき）。
 
-## 6. まだ未実装（Phase1c 以降）
-- 責任チェーンの按分ルール・実効的支配(meaningful human control)スコアの閾値
-- 制度の便益/費用/権利侵害の重み・正当性テストの合否基準
-- post-80 医療 decider の fallback、Robodebt 機序（立証責任転嫁・係争中の不可逆ステータス）
+## 6. 実装状況
+
+### Phase 1c-b で実装済み（`responsibility.py`・§2.10）
+- 責任チェーンの按分ルール（assigned/legitimate の並行ベクトル）・実効的支配(MHC)スコアと閾値。
+- Robodebt 機序（①自動不利益 ②立証責任転嫁 ③実効的レビュー欠如 ④係争中の不可逆ステータス）と、
+  各制度が1機序を解く対応表・プラセボ・事前登録の反証基準。Toeslagen 型代理差別の検出。
+- **決定論ヴィネット生成器** `responsibility_vignettes.py` が `attribution.jsonl` を LLM 無しで出力
+  （Phase1 完了ゲート「按分帰属と Robodebt 再現ヴィネットが台帳から読める」を充足）。
+
+### まだ未実装（Phase1c 以降・残務）
+- **live-sim 結線**: `responsibility.attribute()` を `simulation.py` 実ループへ接続し、LLM 内生の決定
+  （1c-a `realize_decision` 結線残務）から按分を集計する。それまで台帳は決定論ヴィネットのみ
+  （＝rule-conformance の face validity 実証であり、非自明な発見ではない）。
+- 制度の便益/費用/権利侵害の重み・正当性テストの合否基準（有効≠正当の合否ライン）。
+- post-80 医療 decider の fallback（防衛的撤退→サービス空白の責任）。
