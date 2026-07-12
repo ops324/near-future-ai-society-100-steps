@@ -15,14 +15,12 @@ from typing import Dict, List, Optional
 
 import analyze_compare as ac
 
-# 既存 report.html / viz_templates/frame_v2.css と統一（deep space + cyan）。
+# 端末調トークン（Bloomberg 参照）── 動画 Part1/Part2（frame_v2.css / resp_frame.py）と同一言語。
+# フラット近黒・1pxヘアライン・アンバー基軸・意味色（red/blue/green）・グラデ/グロー無し。
 DESIGN_CSS_VARS = """
-  --bg-deep:#04060d; --bg-base:#07091a; --bg-elevated:#111a30;
-  --bg-card:rgba(17,26,48,0.65); --bg-card-soft:rgba(17,26,48,0.35);
-  --accent-cyan:#5ee0ff; --accent-cyan-soft:#3a9fc1; --accent-violet:#a78bfa;
-  --accent-amber:#ffc46b; --danger:#ff7b8a; --ok:#8de2b9;
-  --text-primary:#e6ecf5; --text-secondary:#aab4c8; --text-tertiary:#6b7590; --text-faint:#4a5573;
-  --line-soft:rgba(94,224,255,0.18); --line-strong:rgba(94,224,255,0.42);
+  --bg:#0a0c0e; --surface:#11141a; --inset:#0e1114; --hair:#232830;
+  --txt:#e8eaed; --txt2:#9aa0a6; --txt3:#5f6368;
+  --amber:#ffab2e; --blue:#7cacf8; --red:#f2555a; --green:#53c07e;
 """
 
 # 和文フォント chain（Noto Sans JP を第一に。@font-face があればそれが最優先で解決される）。
@@ -77,7 +75,7 @@ def fmt_metric(v, kind: str) -> str:
 def svg_ab_bars(arms: Dict[str, dict], rows=RATE_ROWS, width: int = 520) -> str:
     """rate 指標を arm ごとに横バーで並べた比較 SVG（HTML の CSS 変数を継承）。"""
     arm_names = list(arms.keys())
-    palette = {"baseline": "var(--danger)", "governed": "var(--accent-cyan)"}
+    palette = {"baseline": "var(--red)", "governed": "var(--blue)"}
     row_h, gap, pad_l, pad_top = 20, 26, 250, 24
     bar_area = width - pad_l - 60
     n = len(rows)
@@ -86,21 +84,21 @@ def svg_ab_bars(arms: Dict[str, dict], rows=RATE_ROWS, width: int = 520) -> str:
              f'xmlns="http://www.w3.org/2000/svg" font-family=\'{FONT_STACK}\'>']
     y = pad_top
     for label, key, _kind, lower_better in rows:
-        parts.append(f'<text x="0" y="{y + 10}" fill="var(--text-secondary)" '
+        parts.append(f'<text x="0" y="{y + 10}" fill="var(--txt2)" '
                      f'font-size="10">{esc(label)}</text>')
         for ai, arm in enumerate(arm_names):
             v = arms.get(arm, {}).get(key)
             frac = 0.0 if v is None else max(0.0, min(1.0, float(v)))
             bw = int(bar_area * frac)
-            color = palette.get(arm, "var(--accent-violet)")
+            color = palette.get(arm, "var(--amber)")
             by = y + ai * row_h
             parts.append(f'<rect x="{pad_l}" y="{by}" width="{bar_area}" height="{row_h - 6}" '
-                         f'rx="3" fill="var(--bg-card-soft)"/>')
+                         f'rx="2" fill="var(--inset)"/>')
             parts.append(f'<rect x="{pad_l}" y="{by}" width="{bw}" height="{row_h - 6}" '
-                         f'rx="3" fill="{color}" opacity="0.85"/>')
+                         f'rx="2" fill="{color}"/>')
             txt = "—" if v is None else f"{v * 100:.0f}%"
             parts.append(f'<text x="{pad_l + bar_area + 8}" y="{by + 11}" '
-                         f'fill="var(--text-primary)" font-size="10">{esc(arm)}:{txt}</text>')
+                         f'fill="var(--txt)" font-size="10">{esc(arm)}:{txt}</text>')
         y += row_h * len(arm_names) + gap
     parts.append("</svg>")
     return "".join(parts)
@@ -227,39 +225,43 @@ def _build_css(font_face_css: str) -> str:
 {font_face_css}
 :root {{{DESIGN_CSS_VARS}}}
 html, body {{
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, #14224a 0%, transparent 55%),
-    radial-gradient(ellipse 70% 50% at 70% 100%, #0e1838 0%, transparent 50%),
-    var(--bg-deep);
-  color: var(--text-primary);
+  background: var(--bg);
+  color: var(--txt);
   font-family: {FONT_STACK};
   font-feature-settings: "palt"; font-size: 10.5pt; line-height: 1.85;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }}
-.mono {{ font-family: "SF Mono","Menlo","Consolas",monospace; font-feature-settings:"tnum"; }}
+.mono {{ font-family: "SF Mono","Menlo","Consolas",monospace; font-variant-numeric: tabular-nums; }}
 .cover {{ page-break-after: always; min-height: 100vh; padding: 30mm 22mm;
-  display:flex; flex-direction:column; justify-content:space-between; }}
-.cover-meta {{ font-size: 9pt; letter-spacing: 0.5em; color: var(--accent-cyan); }}
-.cover-title {{ font-size: 30pt; font-weight: 300; letter-spacing: 0.04em; line-height: 1.35;
-  color: var(--text-primary); }}
-.cover-subtitle {{ font-size: 12pt; letter-spacing: 0.12em; color: var(--text-secondary); }}
-.cover-foot {{ font-size: 9pt; color: var(--text-tertiary); }}
-.card {{ margin: 14mm 18mm; padding: 8mm 9mm; background: var(--bg-card);
-  border: 1px solid var(--line-soft); border-radius: 10px; page-break-inside: avoid; }}
-.card h2 {{ font-size: 15pt; font-weight: 400; color: var(--accent-cyan);
-  margin-bottom: 6mm; border-left: 3px solid var(--accent-cyan-soft); padding-left: 10px; }}
-.card p {{ color: var(--text-secondary); }}
-.card .note, .card .hint {{ color: var(--text-tertiary); font-size: 8.5pt; }}
+  display:flex; flex-direction:column; justify-content:space-between;
+  border-bottom: 1px solid var(--hair); }}
+.cover-meta {{ font-size: 9pt; letter-spacing: 0.5em; color: var(--amber); font-weight: 500;
+  border-bottom: 1px solid var(--hair); padding-bottom: 6mm; }}
+.cover-title {{ font-size: 30pt; font-weight: 500; letter-spacing: 0.02em; line-height: 1.35;
+  color: var(--txt); }}
+.cover-subtitle {{ font-size: 12pt; letter-spacing: 0.1em; color: var(--txt2); }}
+.cover-foot {{ font-size: 9pt; color: var(--txt3); display: flex; gap: 6mm; }}
+.cover-foot .mono {{ border: 1px solid var(--hair); background: var(--inset);
+  border-radius: 2px; padding: 2px 10px; }}
+.card {{ margin: 12mm 18mm; padding: 8mm 9mm; background: var(--surface);
+  border: 1px solid var(--hair); border-radius: 4px; page-break-inside: avoid; }}
+.card h2 {{ font-size: 15pt; font-weight: 500; color: var(--txt);
+  margin-bottom: 5mm; padding-bottom: 3mm; border-bottom: 1px solid var(--hair);
+  border-left: 4px solid var(--amber); padding-left: 10px; border-radius: 0; }}
+.card p {{ color: var(--txt2); }}
+.card p b {{ color: var(--txt); font-weight: 500; }}
+.card .note, .card .hint {{ color: var(--txt3); font-size: 8.5pt; }}
 .hint {{ margin-left: 8px; }}
-.tag {{ font-size: 8pt; letter-spacing: 0.15em; color: var(--accent-amber);
-  border: 1px solid var(--accent-amber); border-radius: 999px; padding: 1px 8px; margin-left: 10px;
+.tag {{ font-size: 8pt; letter-spacing: 0.15em; color: var(--amber);
+  border: 1px solid var(--amber); border-radius: 2px; padding: 1px 8px; margin-left: 10px;
   vertical-align: middle; }}
 .chart {{ margin: 4mm 0 6mm; }}
 table.metrics {{ width: 100%; border-collapse: collapse; margin-top: 4mm; font-size: 9.5pt; }}
 table.metrics th, table.metrics td {{ text-align: left; padding: 4px 8px;
-  border-bottom: 1px solid var(--line-soft); }}
-table.metrics th {{ color: var(--text-tertiary); font-weight: 400; }}
-table.metrics td {{ color: var(--text-secondary); }}
+  border-bottom: 1px solid var(--hair); }}
+table.metrics th {{ color: var(--txt3); font-weight: 400; letter-spacing: 0.04em; }}
+table.metrics td {{ color: var(--txt2); }}
+table.metrics td.mono {{ color: var(--txt); }}
 """
 
 
