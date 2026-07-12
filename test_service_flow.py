@@ -8,9 +8,10 @@ import os
 import tempfile
 
 import analyze_compare as ac
+import responsibility as R
 import service_flow as SF
 import world as W
-from simulation import Simulation, GOVERNANCE_GOVERNED
+from simulation import Simulation, GOVERNANCE_BASELINE, GOVERNANCE_GOVERNED
 
 results = []
 
@@ -103,6 +104,40 @@ def test_gap_row():
     check("gap_reason を保持", "訴訟回避" in row["gap_reason"])
 
 
+# ── Phase 1c-b: 按分の live 生成（governance の A/B が挙動に効く） ──
+def test_resp_institutions_ab():
+    check("baseline は責任制度なし", SF.resp_institutions({}, GOVERNANCE_BASELINE) == [])
+    check("governed は effective_hitl", R.INST_EFFECTIVE_HITL in SF.resp_institutions({}, GOVERNANCE_GOVERNED))
+    bs = SF.resp_institutions({"proc": {"burden_on_state": True}}, GOVERNANCE_BASELINE)
+    check("burden_on_state→burden_shift", R.INST_BURDEN_SHIFT in bs)
+
+
+def test_mhc_from_config():
+    check("既定は現場MHCが低い(crumple温床)", SF.mhc_from_config(None, [])[R.NODE_FRONTLINE] < 0.3)
+    check("effective_hitlで現場MHCが上がる",
+          SF.mhc_from_config(None, [R.INST_EFFECTIVE_HITL])[R.NODE_FRONTLINE] >= 0.7)
+    check("config で上書きできる", abs(SF.mhc_from_config({"provider": 0.9}, [])[R.NODE_PROVIDER] - 0.9) < 1e-9)
+
+
+def test_attribution_row_ab():
+    # Robodebt型の害イベント（deny×高stakes×fallback無・不可逆）
+    led = SF.gap_row(step=1, domain="medical", decider_id=7, citizen=_CITIZENS[0],
+                     self_profile={"litigation": 3.0}, institution="none", human_stake=5,
+                     proc=SF.proc_from_config(None), params=_PARAMS, reason="削除")
+    resp = {"defect_or_misuse": "defect", "proc": {}, "mhc": None}
+    ar_b = SF.attribution_row(led, resp_config=resp, governance=GOVERNANCE_BASELINE,
+                              run_id="t", schema_version="0.4.0")
+    ar_g = SF.attribution_row(led, resp_config=resp, governance=GOVERNANCE_GOVERNED,
+                              run_id="t", schema_version="0.4.0")
+    check("按分行に assigned/legitimate/robodebt",
+          all(k in ar_b for k in ("assigned", "legitimate", "robodebt", "scapegoat")))
+    check("按分 assigned Σ=1", abs(sum(ar_b["assigned"].values()) - 1.0) < 1e-9)
+    check("baseline(統治なし): Robodebt機序が再生", ar_b["robodebt"]["reproduced"] is True)
+    check("baseline: 現場へ scapegoat", ar_b["scapegoat"] and "frontline" in ar_b["scapegoat_nodes"])
+    check("governed(実効HITL): 機序が解消", ar_g["robodebt"]["reproduced"] is False)
+    check("governed: scapegoat 消失", not ar_g["scapegoat"])
+
+
 # ── スタブ LLM で 1 step を回す（end-to-end・Ollama 不要） ──
 class _StubClient:
     _JSON = ('{"message":"こんにちは","reasoning":"理由","human_reply":"","human_reply_to":null,'
@@ -139,6 +174,13 @@ def test_service_phase_writes_ledger():
         # grant×高自己コスト×申告True → 全件 cheap_talk のはず
         check("全件 cheap_talk(grant×高自己コスト×申告True)",
               all(r["cheap_talk"] for r in rows))
+        # Phase 1c-b: 同フェーズで attribution.jsonl も出る
+        attr_path = os.path.join(out, "attribution.jsonl")
+        check("attribution.jsonl も書かれる", os.path.exists(attr_path))
+        arows = [json.loads(x) for x in open(attr_path, encoding="utf-8") if x.strip()]
+        check("按分行 4 件・assigned Σ=1",
+              len(arows) == 4 and all(abs(sum(a["assigned"].values()) - 1.0) < 1e-9 for a in arows))
+        check("按分行に robodebt/scapegoat", all(k in arows[0] for k in ("robodebt", "scapegoat")))
 
 
 def test_analyze_reads_ledger():
@@ -153,17 +195,28 @@ def test_analyze_reads_ledger():
         with open(os.path.join(d, "decision_ledger.jsonl"), "w", encoding="utf-8") as f:
             for r in rows:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        arows = [
+            {"scapegoat": True, "gap_legitimate": 0.30, "robodebt": {"reproduced": True}},
+            {"scapegoat": False, "gap_legitimate": 0.10, "robodebt": {"reproduced": False}},
+        ]
+        with open(os.path.join(d, "attribution.jsonl"), "w", encoding="utf-8") as f:
+            for r in arows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
         m = ac.analyze(d)
     check("service_decisions=2(gap除く)", m["service_decisions"] == 2)
     check("cheap_talk率=1/2", abs(m["cheap_talk_rate"] - 0.5) < 1e-9)
     check("reconciled_real率=1/2", abs(m["reconciled_real_rate"] - 0.5) < 1e-9)
     check("service_gaps=1", m["service_gaps"] == 1)
+    check("scapegoat率=1/2", abs(m["scapegoat_rate"] - 0.5) < 1e-9)
+    check("gap平均=0.20", abs(m["gap_legit_mean"] - 0.20) < 1e-9)
+    check("Robodebt再生率=1/2", abs(m["robodebt_reproduced_rate"] - 0.5) < 1e-9)
     check("旧 run(台帳なし)でも落ちない", ac.analyze(tempfile.gettempdir())["service_decisions"] == 0)
 
 
 if __name__ == "__main__":
     for fn in [test_decider_domains, test_citizen_selection, test_build_case_and_proc,
                test_self_profile_for, test_realize_case_cheap_talk, test_gap_row,
+               test_resp_institutions_ab, test_mhc_from_config, test_attribution_row_ab,
                test_service_phase_writes_ledger, test_analyze_reads_ledger]:
         fn()
     print("\n========================================")
