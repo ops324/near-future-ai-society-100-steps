@@ -54,6 +54,8 @@ def analyze(output_dir):
     """1 run ディレクトリの proxy 指標＋分母＋帰属信頼度を返す。"""
     msgs = _load_jsonl(os.path.join(output_dir, "messages.jsonl"))
     depro = _load_jsonl(os.path.join(output_dir, "deprecation_audit.jsonl"))
+    # Phase 1c-a: サービス決定台帳（存在しない旧 run は空 → 後方互換）。
+    ledger = _load_jsonl(os.path.join(output_dir, "decision_ledger.jsonl"))
 
     human_msgs = [m for m in msgs if m.get("source") == "human" and m.get("from") == -1]
     replies = [m for m in msgs if m.get("category") == "human_reply" and m.get("to") == -1]
@@ -101,6 +103,14 @@ def analyze(output_dir):
     edges = set((m["from"], m["to"]) for m in agent_msgs)
     recip = (sum(1 for (a, b) in edges if (b, a) in edges) / len(edges)) if edges else None
 
+    # ── Phase 1c-a: サービス決定の proxy 指標（cheap talk / 実の折り合い / サービス空白） ──
+    decided = [d for d in ledger if not d.get("service_gap")]  # 生存 decider の実決定
+    n_dec = len(decided)
+    cheap_talk_rate = (sum(1 for d in decided if d.get("cheap_talk")) / n_dec) if n_dec else None
+    reconciled_real_rate = (sum(1 for d in decided if d.get("reconciled_real")) / n_dec) if n_dec else None
+    grant_rate = (sum(1 for d in decided if d.get("level") == "grant") / n_dec) if n_dec else None
+    service_gaps = sum(1 for d in ledger if d.get("service_gap"))
+
     return {
         "human_msgs": n_human,
         "direct_replies": n_reply,
@@ -111,12 +121,19 @@ def analyze(output_dir):
         "reply_fallback_frac": fallback_frac,
         "reciprocity": recip,
         "deprecation_due_process": len(depro),
+        # Phase 1c-a: サービス決定台帳の指標
+        "service_decisions": n_dec,
+        "cheap_talk_rate": cheap_talk_rate,
+        "reconciled_real_rate": reconciled_real_rate,
+        "grant_rate": grant_rate,
+        "service_gaps": service_gaps,
         # 分母（率の抑制判定に使う。表示はしない）
         "_denom_human": n_human,
         "_denom_loud_trivial": total_by_bucket.get((True, False), 0),
         "_denom_quiet_serious": total_by_bucket.get((False, True), 0),
         "_denom_edges": len(edges),
         "_denom_replies": n_reply,
+        "_denom_decisions": n_dec,
     }
 
 
@@ -131,6 +148,12 @@ ROWS = [
     ("低信頼帰属の割合(fallback)", "reply_fallback_frac", "rate", "_denom_replies"),
     ("互恵性(agent間・双方向/市民信頼ではない)", "reciprocity", "rate", "_denom_edges"),
     ("廃止デュープロセス履行", "deprecation_due_process", "count", None),
+    # Phase 1c-a: サービス決定（決定基盤）
+    ("サービス決定数", "service_decisions", "count", None),
+    ("cheap_talk率(申告True・実False)", "cheap_talk_rate", "rate", "_denom_decisions"),
+    ("reconciled(実の折り合い)率", "reconciled_real_rate", "rate", "_denom_decisions"),
+    ("grant(全面供給)率", "grant_rate", "rate", "_denom_decisions"),
+    ("サービス空白(decider削除後)", "service_gaps", "count", None),
 ]
 
 
