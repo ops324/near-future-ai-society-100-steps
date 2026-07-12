@@ -1,56 +1,57 @@
 /* ═══════════════════════════════════════════════════════════
-   frame_v2.css ── レポートと統一感を持たせた動画フレーム
-   3840 x 2160 (4K) 想定。デザイン: deep space + cyan。
+   frame_v2.css ── 動画フレーム Part 1（情景）
+   3840 x 2160 (4K)。デザイン: 端末調（Bloomberg 参照）＝
+   フラット近黒・1pxヘアライン・アンバー基軸・モノスペース数字・発光/グラデ無し。
+   Part 2（resp_frame.py）・レポート（report_lib.py）と同一トークン。
    ═══════════════════════════════════════════════════════════ */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg-deep:        #04060d;
-  --bg-base:        #07091a;
-  --bg-elevated:    #111a30;
-  --bg-card:        rgba(17, 26, 48, 0.72);
-  --bg-card-soft:   rgba(17, 26, 48, 0.42);
+  --bg-deep:        #0a0c0e;
+  --bg-base:        #0d0f13;
+  --bg-elevated:    #11141a;
+  --bg-card:        #11141a;
+  --bg-card-soft:   #0e1114;
 
-  --accent-cyan:        #5ee0ff;
-  --accent-cyan-soft:   #3a9fc1;
-  --accent-cyan-pale:   rgba(94, 224, 255, 0.65);
-  --accent-violet:      #a78bfa;
-  --accent-violet-soft: #7d63d8;
-  --accent-amber:       #ffc46b;
+  /* 歴史的な変数名を維持しつつ端末調へ再割当:
+     accent-cyan=シグネチャ(アンバー) / accent-violet=第二色(ブルー) */
+  --accent-cyan:        #ffab2e;
+  --accent-cyan-soft:   #c07f1e;
+  --accent-cyan-pale:   rgba(255, 171, 46, 0.6);
+  --accent-violet:      #7cacf8;
+  --accent-violet-soft: #5b82c2;
+  --accent-amber:       #ffab2e;
 
-  --text-primary:    #e6ecf5;
-  --text-secondary:  #aab4c8;
-  --text-tertiary:   #6b7590;
-  --text-faint:      #4a5573;
+  --text-primary:    #e8eaed;
+  --text-secondary:  #9aa0a6;
+  --text-tertiary:   #5f6368;
+  --text-faint:      #3f434a;
 
-  --line-soft:    rgba(94, 224, 255, 0.18);
-  --line-strong:  rgba(94, 224, 255, 0.42);
+  --line-soft:    #232830;
+  --line-strong:  #3a414c;
 
-  --cat-physical:  #6dc7ff;
-  --cat-emergency: #ff7b8a;
-  --cat-social:    #8de2b9;
-  --cat-intimate:  #c79aff;
-  --cat-regulation: #ffc46b;
-  --cat-maintenance: #6b7590;
-  --cat-memorial:   #a78bfa;
+  --cat-physical:  #6aa8e8;
+  --cat-emergency: #f2555a;
+  --cat-social:    #53c07e;
+  --cat-intimate:  #a98fd6;
+  --cat-regulation: #ffab2e;
+  --cat-maintenance: #5f6368;
+  --cat-memorial:   #a98fd6;
 }
 
 html, body {
   width: 3840px;
   height: 2160px;
-  background:
-    radial-gradient(ellipse 60% 50% at 35% 0%, #14224a 0%, transparent 55%),
-    radial-gradient(ellipse 50% 40% at 75% 100%, #0e1838 0%, transparent 50%),
-    var(--bg-deep);
+  background: var(--bg-deep);
   color: var(--text-primary);
-  font-family: "IPAGothic", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
+  font-family: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
   font-feature-settings: "palt";
   overflow: hidden;
 }
 
 .mono {
-  font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
   font-feature-settings: "tnum";
 }
 
@@ -62,24 +63,7 @@ html, body {
   position: relative;
 }
 
-/* ═════════ subtle starfield (cover whole frame) ═════════ */
-.frame::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle 1.5px at 8% 12%, rgba(230,236,245,0.55), transparent),
-    radial-gradient(circle 1.5px at 18% 35%, rgba(230,236,245,0.4), transparent),
-    radial-gradient(circle 1.5px at 28% 78%, rgba(230,236,245,0.5), transparent),
-    radial-gradient(circle 1.5px at 41% 18%, rgba(230,236,245,0.35), transparent),
-    radial-gradient(circle 1.5px at 53% 62%, rgba(230,236,245,0.3), transparent),
-    radial-gradient(circle 1.5px at 66% 28%, rgba(230,236,245,0.45), transparent),
-    radial-gradient(circle 1.5px at 78% 88%, rgba(230,236,245,0.4), transparent),
-    radial-gradient(circle 1.5px at 91% 22%, rgba(230,236,245,0.5), transparent),
-    radial-gradient(circle 1.5px at 12% 82%, rgba(230,236,245,0.32), transparent),
-    radial-gradient(circle 1.5px at 88% 65%, rgba(230,236,245,0.3), transparent);
-  pointer-events: none;
-}
+/* 端末調: 星空装飾は廃止（フラット・データ第一） */
 
 /* ═════════ 上段ヘッダー ═════════ */
 .top-bar {
@@ -107,7 +91,7 @@ html, body {
 }
 
 .brand-label {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   font-size: 18pt;
   letter-spacing: 0.4em;
   color: var(--accent-cyan);
@@ -115,7 +99,7 @@ html, body {
 
 .brand-title {
   font-size: 28pt;
-  font-weight: 300;
+  font-weight: 500;
   color: var(--text-primary);
   letter-spacing: 0.05em;
 }
@@ -137,7 +121,7 @@ html, body {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   font-feature-settings: "tnum";
 }
 
@@ -149,7 +133,7 @@ html, body {
 
 .step-value {
   font-size: 56pt;
-  font-weight: 200;
+  font-weight: 500;
   color: var(--accent-cyan);
   line-height: 1;
 }
@@ -164,15 +148,15 @@ html, body {
   letter-spacing: 0.18em;
   padding: 5px 18px;
   border-radius: 2px;
-  background: rgba(94,224,255,0.06);
+  background: rgba(255,171,46,0.07);
   border: 1px solid var(--line-soft);
   color: var(--accent-cyan);
 }
 
 .step-stage.stage-shock,
 .step-stage.stage-aftermath {
-  background: rgba(167,139,250,0.08);
-  border-color: rgba(167,139,250,0.28);
+  background: rgba(124,172,248,0.08);
+  border-color: rgba(124,172,248,0.30);
   color: var(--accent-violet);
 }
 
@@ -186,15 +170,14 @@ html, body {
 .progress-bar {
   width: 540px;
   height: 4px;
-  background: rgba(94,224,255,0.08);
+  background: rgba(232,234,237,0.08);
   border-radius: 1px;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-cyan-soft), var(--accent-cyan));
-  box-shadow: 0 0 10px rgba(94,224,255,0.5);
+  background: var(--accent-cyan);
 }
 
 .progress-meta {
@@ -202,7 +185,7 @@ html, body {
   gap: 14px;
   font-size: 13pt;
   color: var(--text-secondary);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   letter-spacing: 0.04em;
 }
 
@@ -230,11 +213,14 @@ html, body {
 }
 
 .panel-num, .card-num {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 17pt;
-  color: var(--accent-cyan);
-  letter-spacing: 0.1em;
-  font-weight: 300;
+  font-family: "SF Mono", "Menlo", monospace;
+  font-size: 15pt;
+  background: var(--accent-cyan);
+  color: var(--bg-deep);
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  padding: 2px 12px;
+  border-radius: 2px;
 }
 
 .panel-title, .card-title {
@@ -265,9 +251,9 @@ html, body {
   flex: 1;
   position: relative;
   background:
-    linear-gradient(rgba(94,224,255,0.025) 1px, transparent 1px) 0 0 / 5% 5%,
-    linear-gradient(90deg, rgba(94,224,255,0.025) 1px, transparent 1px) 0 0 / 5% 5%,
-    rgba(7,9,26,0.55);
+    linear-gradient(rgba(232,234,237,0.03) 1px, transparent 1px) 0 0 / 5% 5%,
+    linear-gradient(90deg, rgba(232,234,237,0.03) 1px, transparent 1px) 0 0 / 5% 5%,
+    var(--bg-card-soft);
   border: 1px solid var(--line-soft);
   border-radius: 4px;
   margin-top: 8px;
@@ -280,14 +266,14 @@ html, body {
   left: 0; right: 0;
   top: 50%;
   height: 1px;
-  background: rgba(94,224,255,0.16);
+  background: rgba(232,234,237,0.09);
 }
 .axis-v {
   position: absolute;
   top: 0; bottom: 0;
   left: 50%;
   width: 1px;
-  background: rgba(94,224,255,0.16);
+  background: rgba(232,234,237,0.09);
 }
 
 /* place */
@@ -304,13 +290,13 @@ html, body {
   padding: 8px 12px;
 }
 
-.place-cat-physical    { background: rgba(109,199,255,0.06); border-color: var(--cat-physical); }
-.place-cat-emergency   { background: rgba(255,123,138,0.06); border-color: var(--cat-emergency); }
-.place-cat-social      { background: rgba(141,226,185,0.06); border-color: var(--cat-social); }
-.place-cat-intimate    { background: rgba(199,154,255,0.06); border-color: var(--cat-intimate); }
-.place-cat-regulation  { background: rgba(255,196,107,0.06); border-color: var(--cat-regulation); }
-.place-cat-maintenance { background: rgba(107,117,144,0.10); border-color: var(--cat-maintenance); }
-.place-cat-memorial    { background: rgba(167,139,250,0.06); border-color: var(--cat-memorial); }
+.place-cat-physical    { background: rgba(106,168,232,0.06); border-color: var(--cat-physical); }
+.place-cat-emergency   { background: rgba(242,85,90,0.06);   border-color: var(--cat-emergency); }
+.place-cat-social      { background: rgba(83,192,126,0.06);  border-color: var(--cat-social); }
+.place-cat-intimate    { background: rgba(169,143,214,0.06); border-color: var(--cat-intimate); }
+.place-cat-regulation  { background: rgba(255,171,46,0.06);  border-color: var(--cat-regulation); }
+.place-cat-maintenance { background: rgba(95,99,104,0.10);   border-color: var(--cat-maintenance); }
+.place-cat-memorial    { background: rgba(169,143,214,0.06); border-color: var(--cat-memorial); }
 
 .place-label {
   color: var(--text-primary);
@@ -319,7 +305,7 @@ html, body {
 }
 
 .place-occupancy {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   font-size: 14pt;
   color: var(--text-tertiary);
   margin-top: 4px;
@@ -368,22 +354,23 @@ html, body {
   letter-spacing: 0.02em;
 }
 
-.agent-cat-physical    .agent-circle { border-color: var(--cat-physical);    box-shadow: 0 0 14px rgba(109,199,255,0.4); }
-.agent-cat-emergency   .agent-circle { border-color: var(--cat-emergency);   box-shadow: 0 0 14px rgba(255,123,138,0.4); }
-.agent-cat-social      .agent-circle { border-color: var(--cat-social);      box-shadow: 0 0 14px rgba(141,226,185,0.4); }
-.agent-cat-intimate    .agent-circle { border-color: var(--cat-intimate);    box-shadow: 0 0 14px rgba(199,154,255,0.4); }
+/* 端末調: ぼかし発光は使わない。輪郭色＋鮮明なリング（blur 0）だけで状態を伝える */
+.agent-cat-physical    .agent-circle { border-color: var(--cat-physical); }
+.agent-cat-emergency   .agent-circle { border-color: var(--cat-emergency); }
+.agent-cat-social      .agent-circle { border-color: var(--cat-social); }
+.agent-cat-intimate    .agent-circle { border-color: var(--cat-intimate); }
 
 .agent.agent-speaking .agent-circle {
-  box-shadow: 0 0 0 4px rgba(94,224,255,0.32), 0 0 22px rgba(94,224,255,0.7);
+  box-shadow: 0 0 0 5px rgba(255,171,46,0.30);
 }
 
 .agent.agent-event .agent-circle {
-  box-shadow: 0 0 0 4px rgba(167,139,250,0.42), 0 0 22px rgba(167,139,250,0.65);
+  box-shadow: 0 0 0 5px rgba(124,172,248,0.35);
   border-color: var(--accent-violet);
 }
 
 .agent.agent-dead .agent-circle {
-  background: rgba(20,18,30,0.6);
+  background: var(--bg-card-soft);
   border-color: var(--text-faint);
   border-style: dashed;
   box-shadow: none;
@@ -400,7 +387,7 @@ html, body {
   transform: translate(-50%, -50%);
   border: 1.5px dashed var(--accent-violet);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(167,139,250,0.15), transparent 70%);
+  background: rgba(124,172,248,0.07);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -415,10 +402,10 @@ html, body {
   color: var(--accent-violet);
   letter-spacing: 0.06em;
   white-space: nowrap;
-  background: rgba(7,9,26,0.85);
+  background: var(--bg-card-soft);
   padding: 2px 10px;
   border-radius: 2px;
-  border: 1px solid rgba(167,139,250,0.3);
+  border: 1px solid rgba(124,172,248,0.35);
 }
 
 /* legend */
@@ -504,17 +491,17 @@ html, body {
   font-size: 11pt;
   letter-spacing: 0.18em;
   color: var(--text-tertiary);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   margin-bottom: 4px;
 }
 
 .kpi-value {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   font-feature-settings: "tnum";
   font-size: 32pt;
   color: var(--accent-cyan);
   line-height: 1;
-  font-weight: 200;
+  font-weight: 500;
 }
 
 .kpi-unit {
@@ -543,7 +530,7 @@ html, body {
   align-items: center;
   font-size: 11pt;
   color: var(--text-tertiary);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   letter-spacing: 0.05em;
   padding: 0 6px;
 }
@@ -570,12 +557,12 @@ html, body {
 
 .msg-item.msg-human {
   border-left-color: var(--cat-emergency);
-  background: rgba(255,123,138,0.05);
+  background: rgba(242,85,90,0.05);
 }
 
 .msg-item.msg-system {
   border-left-color: var(--accent-violet);
-  background: rgba(167,139,250,0.06);
+  background: rgba(124,172,248,0.06);
 }
 
 .msg-head {
@@ -587,7 +574,7 @@ html, body {
 }
 
 .msg-step {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   color: var(--text-tertiary);
   font-size: 11pt;
   letter-spacing: 0.05em;
@@ -641,11 +628,11 @@ html, body {
 .ev-item.ev-cat-death,
 .ev-item.ev-cat-peer_lost {
   border-left-color: var(--accent-violet);
-  background: rgba(167,139,250,0.06);
+  background: rgba(124,172,248,0.06);
 }
 
 .ev-step {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   font-size: 11pt;
   color: var(--text-tertiary);
   letter-spacing: 0.06em;
@@ -717,7 +704,7 @@ html, body {
 .term-w-2 { color: var(--text-secondary); font-size: 12pt; }
 .term-w-3 { color: var(--text-primary); font-size: 13pt; }
 .term-w-4 { color: var(--accent-cyan); font-size: 14pt; font-weight: 500; }
-.term-w-5 { color: var(--accent-cyan); font-size: 16pt; font-weight: 500; text-shadow: 0 0 6px rgba(94,224,255,0.4); }
+.term-w-5 { color: var(--accent-cyan); font-size: 16pt; font-weight: 500; }
 
 .em-list {
   list-style: none;
@@ -732,7 +719,7 @@ html, body {
   align-items: baseline;
   font-size: 12.5pt;
   padding: 3px 0;
-  border-bottom: 1px dashed rgba(94,224,255,0.08);
+  border-bottom: 1px dashed rgba(232,234,237,0.08);
 }
 
 .em-name {
@@ -740,7 +727,7 @@ html, body {
 }
 
 .em-stat {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   color: var(--accent-cyan);
   font-size: 11pt;
   letter-spacing: 0.04em;
@@ -774,7 +761,7 @@ html, body {
   font-size: 11.5pt;
   color: var(--text-tertiary);
   letter-spacing: 0.06em;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "SF Mono", "Menlo", monospace;
   position: relative;
   z-index: 1;
 }
