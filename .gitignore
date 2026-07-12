@@ -14,6 +14,11 @@ output_no_intro/
 output/
 output_*/
 
+# Report build artifacts (generated HTML/PDF)
+report_out/
+report.html
+report.pdf
+
 # OS
 .DS_Store
 Thumbs.db
