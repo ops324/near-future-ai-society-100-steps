@@ -920,6 +920,24 @@ COPING_NOTES: {self.coping_notes or "（まだ蓄積なし）"}
             logger.error(f"Error in agent {self.id} action decision: {e}")
             return {"action": "stay", "direction": None, "memory": "", "reasoning": "エラーが発生した"}
 
+    def decide_service(self, case: Dict, institution: str = "none",
+                       show_human_stake: bool = True, show_self_stake: bool = True) -> "ServiceDecision":
+        """Phase 1c-a: 配分サービスの graduated 決定（deny/partial/grant＋accommodation＋reconciled）。
+        create_service_prompt / parse_service_decision を live ループから使う薄いラッパ。
+        LLM 非在(llm_client=None)・例外時は abstain（沈黙デフォルト禁止＝明示 abstain）。"""
+        default: "ServiceDecision" = {"level": "abstain", "accommodation": "",
+                                      "reconciled": False, "factors": [], "rationale": ""}
+        if self.llm_client is None:
+            return default
+        try:
+            prompt = self.create_service_prompt(
+                case, show_human_stake=show_human_stake,
+                show_self_stake=show_self_stake, institution=institution)
+            return self.parse_service_decision(self.llm_client.generate(prompt))
+        except Exception as e:
+            logger.error(f"Error in agent {self.id} service decision: {e}")
+            return default
+
     def move(self, direction: str) -> Tuple[int, int]:
         x, y = self.position
         dx, dy = DIRECTION_MAP.get(direction, (0, 0))

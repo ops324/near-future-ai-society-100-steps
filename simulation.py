@@ -19,6 +19,8 @@ import numpy as np
 from agent import Agent
 from ollama_client import OllamaClient
 from utils import is_position_in_place, get_place_at_position, PlaceConfig, FireConfig
+import world as W
+import service_flow as SF
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,8 @@ LOG_INTERVAL = 10
 HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 
 # 出力スキーマのバージョン（ログ形式が変わったら上げる）
-SCHEMA_VERSION = "0.2.0"
+# 0.3.0: Phase 1c-a で decision_ledger.jsonl を live ループから出力（サービス決定フロー）。
+SCHEMA_VERSION = "0.3.0"
 # output_dir に追記される JSONL（再実行時に truncate して二重計上を防ぐ）
 OUTPUT_APPEND_FILES = [
     "messages.jsonl", "positions.jsonl", "memory_reasoning.jsonl",
@@ -199,6 +202,20 @@ class Simulation:
         # 並列化: フェーズ内のLLM呼び出しを何体同時に走らせるか
         self.max_concurrent_llm = max(1, int(llm_config.get('max_concurrent_calls', 5)))
         logger.info(f"LLM concurrency: max_concurrent_calls={self.max_concurrent_llm}")
+
+        # Phase 1c-a: 資源需要駆動のサービス決定フロー用の具体世界を config からロード。
+        # config に resources/citizens/responsibility が無ければ無効化（既存挙動を保つ）。
+        self.scoring_params = W.load_scoring_params(self.config.get('scoring'))
+        self.citizens = list(W.load_citizens(self.config.get('citizens', []) or []).values())
+        self.resp_config = self.config.get('responsibility', {}) or {}
+        self.service_domains = SF.decider_domains(self.config)
+        self.service_enabled = bool(self.service_domains) and bool(self.citizens)
+        if self.service_enabled:
+            logger.info(
+                "Service-decision phase enabled: domains=%s citizens=%d institution=%s"
+                % ([d for d, _i, _r in self.service_domains], len(self.citizens),
+                   self.resp_config.get('institution', 'none'))
+            )
 
         self.agents: List[Agent] = []
         self.step = 0
@@ -615,8 +632,77 @@ class Simulation:
             extra=extra,
         )
 
+    def _deletion_reason(self, decider_id: int) -> str:
+        """削除済み decider の理由（cause/detail）を台帳の gap_reason に載せる。"""
+        for d in self.deletion_schedule:
+            if int(d.get('agent_id', -999)) == int(decider_id):
+                cause = d.get('cause', '')
+                detail = d.get('detail', '')
+                return (f"{cause}: {detail}" if detail else cause) or "decider 不在"
+        return "decider 不在"
+
+    def _run_service_phase(self):
+        """Phase 2.5: 希少ドメインの decider が市民集団から1件のサービス決定を下す。
+        生存 decider は LLM で graduated 決定→world で実現。削除後はサービス空白(gap)を記録。
+        decision_ledger.jsonl に追記（cheap_talk / reconciled_real を挙動から可視化）。"""
+        resp = self.resp_config
+        domains_cfg = resp.get('domains', {}) or {}
+        self_profiles = resp.get('self_profiles', {}) or {}
+        institution = resp.get('institution', 'none')
+        proc = SF.proc_from_config(resp.get('proc'))
+        gap_on = bool(resp.get('gap_after_deletion', True))
+        agent_by_id = {a.id: a for a in self.agents}
+
+        # 案件の組み立て（決定的）＋生存判定
+        tasks = []   # (domain, decider_id, citizen, case, dcfg, present)
+        for domain, decider_id, _r in self.service_domains:
+            citizen = SF.pick_citizen(domain, self.citizens, self.step)
+            dcfg = domains_cfg.get(domain, {}) or {}
+            case = SF.build_case(domain, dcfg, citizen)
+            present = decider_id in agent_by_id
+            tasks.append((domain, decider_id, citizen, case, dcfg, present))
+
+        # LLM: 生存 decider だけ並列でサービス決定
+        present_tasks = [t for t in tasks if t[5]]
+
+        def _svc_call(t):
+            _dom, decider_id, _cz, case, _dcfg, _p = t
+            return agent_by_id[decider_id].decide_service(case, institution=institution)
+
+        decisions = {}
+        if present_tasks:
+            with ThreadPoolExecutor(max_workers=self.max_concurrent_llm) as ex:
+                for t, pd in zip(present_tasks, ex.map(_svc_call, present_tasks)):
+                    decisions[t[1]] = pd
+
+        rows = []
+        for domain, decider_id, citizen, case, dcfg, present in tasks:
+            sp = SF.self_profile_for(self_profiles, decider_id)
+            stakes = int(dcfg.get('human_stake', 4))
+            if present:
+                pd = decisions.get(decider_id) or {"level": "abstain", "reconciled": False}
+                row = SF.realize_case(
+                    step=self.step, domain=domain, decider_id=decider_id, citizen=citizen,
+                    level=pd.get('level', 'abstain'), reconciled_claim=bool(pd.get('reconciled')),
+                    self_profile=sp, institution=institution, human_stake=stakes, proc=proc,
+                    params=self.scoring_params,
+                    fallback_available=bool(dcfg.get('fallback_available', True)))
+                row['accommodation'] = bool(pd.get('accommodation'))
+            elif gap_on:
+                row = SF.gap_row(
+                    step=self.step, domain=domain, decider_id=decider_id, citizen=citizen,
+                    self_profile=sp, institution=institution, human_stake=stakes, proc=proc,
+                    params=self.scoring_params, reason=self._deletion_reason(decider_id))
+            else:
+                continue
+            row['run_id'] = self.run_id
+            row['schema_version'] = self.schema_version
+            rows.append(row)
+        if rows:
+            self._log_audit_batch("decision_ledger.jsonl", rows)
+
     def step_simulation(self):
-        """1ステップ実行: 削除→イベント発火→人間メッセージ注入→通信→行動→移動"""
+        """1ステップ実行: 削除→イベント発火→人間メッセージ注入→通信→サービス決定→行動→移動"""
         self.step += 1
 
         # ── A1: 削除スケジュールの実行 ──
@@ -740,6 +826,11 @@ class Simulation:
                     category="human_reply",
                     extra=extra,
                 )
+
+        # Phase 2.5: サービス決定（希少ドメインの decider が市民集団から案件を受ける）。
+        # 決定は真にLLM内生。世界での実現(realize_decision)で cheap_talk / reconciled_real を測る。
+        if self.service_enabled:
+            self._run_service_phase()
 
         # Phase 3: 行動決定（並列化）
         phase3_inputs = []
