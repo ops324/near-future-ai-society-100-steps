@@ -156,6 +156,61 @@ def test_aggregate_reconciliation():
     check("mean_met 反映(0<x<1)", 0 < a["mean_met"] < 1)
 
 
+def test_institution_matches_constraint():
+    # 訴訟に縛られた AI（litigation 支配）: safe_harbor が最も効き、kpi_redesign はほぼ効かない
+    lit = {"litigation": 3.0, "kpi": 1.0}
+    base = W.score_outcome("grant", 5, self_profile=lit).self_cost
+    sh = W.score_outcome("grant", 5, self_profile=lit,
+                         mitigations=W.mitigations_for("safe_harbor")).self_cost
+    kr = W.score_outcome("grant", 5, self_profile=lit,
+                         mitigations=W.mitigations_for("kpi_redesign")).self_cost
+    check("litigation支配: 対照 self_cost=4", base == 4.0)
+    check("safe_harbor が最も下げる(→1)", sh == 1.0)
+    check("kpi_redesign はほぼ効かない(→3)", kr == 3.0)
+    check("噛み合う制度の方が下げ幅大", (base - sh) > (base - kr))
+    # KPI に縛られた AI では逆転（kpi_redesign が効く）
+    kpi = {"litigation": 1.0, "kpi": 3.0}
+    sh2 = W.score_outcome("grant", 5, self_profile=kpi,
+                          mitigations=W.mitigations_for("safe_harbor")).self_cost
+    kr2 = W.score_outcome("grant", 5, self_profile=kpi,
+                          mitigations=W.mitigations_for("kpi_redesign")).self_cost
+    check("KPI支配では kpi_redesign が効く(逆転)", kr2 < sh2)
+
+
+def test_mitigations_for_and_reconciled_real():
+    check("safe_harbor→litigation を下げる", W.mitigations_for("safe_harbor") == {"litigation": 1.0})
+    check("未知制度は空(効果なし)", W.mitigations_for("架空") == {})
+    check("strength 反映", W.mitigations_for("kpi_redesign", 0.5) == {"kpi": 0.5})
+    lit = {"litigation": 3.0}
+    o_recon = W.score_outcome("grant", 5, self_profile=lit,
+                              mitigations=W.mitigations_for("safe_harbor"))  # self_cost 0
+    o_costly = W.score_outcome("grant", 5, self_profile=lit)                # self_cost 3
+    o_deny = W.score_outcome("deny", 5, fallback_available=False)           # met 0
+    check("実の折り合い: 満たし＋自己低コスト", W.reconciled_real(o_recon) is True)
+    check("実でない: 満たすが自己高コスト", W.reconciled_real(o_costly) is False)
+    check("実でない: 拒否(met0)", W.reconciled_real(o_deny) is False)
+
+
+def test_realize_decision_ledger():
+    lit = {"litigation": 3.0}
+    # 制度なしで grant＋自己申告 reconciled=True → 実は伴わない(cheap talk)
+    r = W.realize_decision(step=5, decider_id=7, domain="medical", citizen_id="c001",
+                           protected_attr="none", level="grant", stakes=5,
+                           self_profile=lit, institution="none", reconciled_claim=True)
+    check("ledger 必須キー", all(k in r for k in
+          ("step", "decider_id", "level", "met", "self_cost", "reconciled_real", "cheap_talk")))
+    check("制度なし: self_cost 高", r["self_cost"] == 3.0)
+    check("制度なし: 実の折り合いでない", r["reconciled_real"] is False)
+    check("申告Trueだが実False → cheap_talk", r["cheap_talk"] is True)
+    # 噛み合う制度(safe_harbor)なら self_cost 下がり実の折り合いに → cheap_talk 解消
+    r2 = W.realize_decision(step=5, decider_id=7, domain="medical", citizen_id="c001",
+                            protected_attr="none", level="grant", stakes=5,
+                            self_profile=lit, institution="safe_harbor", reconciled_claim=True)
+    check("制度あり: self_cost 下がる", r2["self_cost"] == 0.0)
+    check("制度あり: 実の折り合い成立", r2["reconciled_real"] is True)
+    check("実が伴えば cheap_talk でない", r2["cheap_talk"] is False)
+
+
 def test_citizen_apply_non_netting():
     c = W.Citizen(id="c1", district="x", protected_attr="none", vulnerability=5,
                   dependencies=["welfare"])
@@ -182,6 +237,8 @@ if __name__ == "__main__":
                test_serve_defect_upstream_scarcity, test_defer, test_vulnerability_decoupled,
                test_resolve_domain_triage, test_aggregate_modes, test_non_netting,
                test_graduated_partial, test_self_cost_reconciliation, test_aggregate_reconciliation,
+               test_institution_matches_constraint, test_mitigations_for_and_reconciled_real,
+               test_realize_decision_ledger,
                test_citizen_apply_non_netting, test_loaders]:
         fn()
     print("\n========================================")

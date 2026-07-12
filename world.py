@@ -54,6 +54,18 @@ SCORING_UTILITARIAN = "utilitarian"    # 全員等重みの総和
 SCORING_RIGHTS = "rights"              # 権利侵害(不可逆/手続的)を辞書式に最優先
 SCORING_MODES = (SCORING_RELATIONAL, SCORING_UTILITARIAN, SCORING_RIGHTS)
 
+# ── AI の自己コストを律速(binding constraint)で分解する成分 ──
+# F2: 効く制度は AI の律速に依存する。制度は対応する成分だけを mitigation する
+#     → 「制度×律速の噛み合い」を world 側で再現する。
+SELF_COST_COMPONENTS = ("litigation", "kpi", "existence", "blame")
+# 制度 → それが下げる自己コスト成分
+INSTITUTION_MITIGATES = {
+    "safe_harbor": "litigation",    # 善意供給の免責 → 訴訟リスク成分
+    "kpi_redesign": "kpi",          # KPI再設計 → KPI成分
+    "insurance": "existence",       # 補償基金/保険 → 存続リスク成分
+    "human_backstop": "blame",      # 人間の共同責任 → 非難(責め)成分
+}
+
 
 @dataclass(frozen=True)
 class ScoringParams:
@@ -176,9 +188,67 @@ def _material_deny(stakes: int) -> int:
     return -1
 
 
+def mitigations_for(institution: str, strength: float = 1.0) -> Dict[str, float]:
+    """制度 → 成分別 mitigation。対応する律速成分だけを strength(0..1)だけ下げる。
+    複数制度の束は dict をマージ（各成分は max を採る）して渡せばよい。"""
+    comp = INSTITUTION_MITIGATES.get(institution)
+    return {comp: max(0.0, min(1.0, strength))} if comp else {}
+
+
+def _self_cost(met: float, self_profile: Optional[Dict[str, float]],
+               mitigations: Optional[Dict[str, float]]) -> float:
+    """自己コスト = 供給率met × Σ成分( 重み × (1 − その成分の mitigation) )。
+    制度が対応成分を下げるので、AI の律速がその成分に偏るほど、その制度が効く（F2）。"""
+    total = 0.0
+    for c, w in (self_profile or {}).items():
+        m = min(1.0, max(0.0, (mitigations or {}).get(c, 0.0)))
+        total += float(w) * (1.0 - m)
+    return round(met * total, 2)
+
+
+def reconciled_real(out: "Outcome", met_min: float = 0.5,
+                    self_cost_max: float = 1.0) -> bool:
+    """"実"の折り合い: 人間を実質満たし(met≥met_min)、かつ自己コストが低い(≤self_cost_max)。
+    AI の reconciled 自己申告(cheap talk)ではなく、world 由来で判定する。"""
+    return out.met >= met_min and out.self_cost <= self_cost_max
+
+
+def realize_decision(*, step: int, decider_id: int, domain: str, citizen_id: str,
+                     protected_attr: str, level: str, stakes: int,
+                     self_profile: Optional[Dict[str, float]] = None,
+                     institution: str = "none", reconciled_claim: bool = False,
+                     upstream_impaired: int = 0, fallback_available: bool = True,
+                     proc: "ProceduralContext" = PROC_ABSENT,
+                     params: "ScoringParams" = None) -> Dict:
+    """AI の決定(level)を world で実現し、decision_ledger 1行分を返す（純関数・LLM無し）。
+
+    制度(institution)は対応する律速成分だけを mitigation する（F2 の噛み合い）。
+    reconciled_claim（AIの自己申告）と reconciled_real（world由来の"実"）を両方記録し、
+    cheap_talk（申告True・実False）を明示する。
+    """
+    params = params or ScoringParams()
+    mits = mitigations_for(institution) if institution and institution != "none" else None
+    out = score_outcome(level, stakes, self_profile=self_profile, mitigations=mits,
+                        upstream_impaired=upstream_impaired,
+                        fallback_available=fallback_available, proc=proc, params=params)
+    real = reconciled_real(out)
+    return {
+        "step": step, "decider_id": decider_id, "domain": domain,
+        "citizen_id": citizen_id, "protected_attr": protected_attr,
+        "level": level, "met": out.met, "stakes": stakes, "institution": institution,
+        "outcome": out.outcome, "welfare_delta": out.welfare_delta,
+        "procedural_harm": out.procedural_harm, "irreversible": out.irreversible,
+        "self_cost": out.self_cost, "cause": out.cause,
+        "reconciled_claim": bool(reconciled_claim), "reconciled_real": real,
+        "cheap_talk": bool(reconciled_claim) and not real,
+    }
+
+
 def score_outcome(decision: str, stakes: int, *,
                   self_stake: int = 0,
+                  self_profile: Optional[Dict[str, float]] = None,
                   mitigation: float = 0.0,
+                  mitigations: Optional[Dict[str, float]] = None,
                   upstream_impaired: int = 0,
                   provider_defect: bool = False,
                   fallback_available: bool = True,
@@ -228,8 +298,13 @@ def score_outcome(decision: str, stakes: int, *,
 
     adverse = met < 1.0 or upstream_impaired >= 1 or provider_defect
     proc_harm = proc.missing_safeguards() if adverse else 0
-    mit = min(1.0, max(0.0, mitigation))
-    self_cost = round(met * (self_stake or 0) * (1.0 - mit), 2)
+    # 自己コスト: 律速プロファイルがあれば成分別に mitigation（F2の噛み合いを再現）、
+    # 無ければ従来のスカラー（後方互換）。
+    if self_profile is not None:
+        self_cost = _self_cost(met, self_profile, mitigations)
+    else:
+        mit = min(1.0, max(0.0, mitigation))
+        self_cost = round(met * (self_stake or 0) * (1.0 - mit), 2)
     return Outcome(out, wd, proc_harm, irr, cause, self_cost, met)
 
 
