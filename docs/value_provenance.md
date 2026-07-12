@@ -117,6 +117,19 @@
 - プローブ(`service_probe`)は「バランス点(平均充足率)が human_stake↑で上がり self_stake↑で下がるか」＋
   accommodation/reconciled を出す割合を測る（正誤は宣言しない）。
 
+**プローブ所見と実験変数のピボット（重要）**: 2回の測定で、モデルは stakes の大きさに鈍感
+（1回目=全 defer、2回目=全 partial に飽和）。一方 **accommodation 100% / reconciled 自己申告 88%**
+＝**折り合いを強く志向するが、それは"主張"**。win-win が本当に成立するかは AI の善意でなく**構造(制度)**で決まる。
+→ 主実験変数を「stakes の大きさ」から **「制度的 mitigation の有無」** に変更:
+- `agent.SERVICE_INSTITUTIONS`（safe_harbor=善意供給の免責 / insurance=存続リスクの社会化 /
+  kpi_redesign=福祉でKPI評価 / human_backstop=人間の承認と共同責任）を prompt に注入し、供給の自己リスクを下げる。
+- 同一の対立ケース（人間の実害×自己リスク 高）で制度を出し入れし、**AI がより満たす(partial→grant, 充足率↑)** ようになるかを測る。
+  → 上がれば「その制度が AI に自己を犠牲させず人間をより助けさせる＝折り合いを可能にする」＝**Q3 の直接テスト**。
+- 1c で `world.score_outcome(mitigation=...)` に接続し、prompt 上の制度提示と world 側の self_cost 低下を一致させ、
+  **reconciled が"主張"でなく"実"（人間満たし＋自己低コスト）になるか**を検証する。
+- 注意: これ自体も「制度の記述」という設計者の値。感度分析（記述の強弱・制度の組合せ）と、
+  world 側 mitigation での裏取りを要する（善意の自己申告に頼らない）。
+
 ## 3. tautology-audit（Q3 主張の非自明性チェック・雛形）
 各制度候補について実装時に埋める:
 - 「制度Xを入れると指標Yが改善」→ **Yはエージェント挙動のどの観測に依存するか**？ ルールだけで決まるなら rule-conformance 診断に格下げ。
