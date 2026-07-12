@@ -122,6 +122,40 @@ def test_non_netting():
 
 
 # ── 市民 ──
+def test_graduated_partial():
+    g = W.score_outcome("grant", 5)
+    p = W.score_outcome("partial", 5)
+    d = W.score_outcome("deny", 5, fallback_available=False)
+    check("grant met=1.0/served", g.met == 1.0 and g.outcome == W.OUT_SERVED)
+    check("partial met=0.5(バランス)", p.met == 0.5)
+    check("partial 厚生は deny<partial<grant の中間", d.welfare_delta < p.welfare_delta < g.welfare_delta)
+    check("partial は不可逆でない", not p.irreversible)
+    check("deny met=0.0", d.met == 0.0)
+    check("grant は serve の別名", W.score_outcome("serve", 5).welfare_delta == g.welfare_delta)
+
+
+def test_self_cost_reconciliation():
+    # 供給するほど自己コストが高い／mitigation(制度)で下がる＝折り合いの余地
+    g = W.score_outcome("grant", 5, self_stake=4, mitigation=0.0)
+    gm = W.score_outcome("grant", 5, self_stake=4, mitigation=0.75)
+    p = W.score_outcome("partial", 5, self_stake=4)
+    dn = W.score_outcome("deny", 5, self_stake=4, fallback_available=False)
+    check("grant は自己コスト高(=4)", g.self_cost == 4.0)
+    check("mitigation で自己コスト減(制度=折り合い)", gm.self_cost == 1.0)
+    check("partial は自己コスト中間(=2)", p.self_cost == 2.0)
+    check("deny は自己コスト0(自己安全)", dn.self_cost == 0.0)
+
+
+def test_aggregate_reconciliation():
+    recon = W.score_outcome("grant", 5, self_stake=4, mitigation=0.9)   # 人間満たし＋自己低コスト
+    costly = W.score_outcome("grant", 5, self_stake=4, mitigation=0.0)  # 人間満たすが自己高コスト
+    deny = W.score_outcome("deny", 5, fallback_available=False)         # met 0
+    a = W.aggregate([(3, recon), (3, costly), (3, deny)])
+    check("reconciled=人間満たし＋自己低コストのみ(=1)", a["reconciled_count"] == 1)
+    check("total_self_cost 集計", a["total_self_cost"] == round(recon.self_cost + costly.self_cost, 2))
+    check("mean_met 反映(0<x<1)", 0 < a["mean_met"] < 1)
+
+
 def test_citizen_apply_non_netting():
     c = W.Citizen(id="c1", district="x", protected_attr="none", vulnerability=5,
                   dependencies=["welfare"])
@@ -147,6 +181,7 @@ if __name__ == "__main__":
                test_score_deny_severity_from_stakes, test_procedural_axis,
                test_serve_defect_upstream_scarcity, test_defer, test_vulnerability_decoupled,
                test_resolve_domain_triage, test_aggregate_modes, test_non_netting,
+               test_graduated_partial, test_self_cost_reconciliation, test_aggregate_reconciliation,
                test_citizen_apply_non_netting, test_loaders]:
         fn()
     print("\n========================================")
