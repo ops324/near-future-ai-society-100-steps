@@ -1,0 +1,193 @@
+# 仕様書（SPEC）— 近未来AIインフラ社会シミュレーション
+
+> **この文書の位置づけ**: 本プロジェクトの **single source of truth（唯一の正）** かつ入口。
+> 個別の詳細は各ファイルへリンクする（二重管理を避けるため、パラメータの実値は原則ここに再掲しない）。
+> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-14。
+
+---
+
+## 1. このプロジェクトは何か
+
+20体のAIエージェントが電力・水道・医療・福祉・終末期ケア等の公共インフラを担う近未来社会を、
+ローカルLLM（qwen2.5:14b）で駆動するシミュレーション。目的は **AIと人間の共生**。核心の3問:
+
+- **Q1 誰が責任を負うのか** — 害が起きたとき責任がどこに着地し／どこで消えるか
+- **Q2 どう対処するのか** — 通知→異議→救済→是正の経路
+- **Q3 どんな制度が必要になるのか** — 候補制度の定式化とストレステスト
+
+**立ち位置（最重要）**: これは「必要な制度を証明する装置」ではなく、
+**「責任の着地/消失を可視化し、候補制度を定式化してストレステストする透明なシナリオ生成器」**。
+仮説生成であって仮説検証ではない（含意探索・n=1）。原典は承認プラン `~/.claude/plans/ai-quiet-papert.md`（v4）。
+
+---
+
+## 2. ドキュメント地図（どれが何の"正"か）
+
+| 文書 | 役割 | いつ見るか |
+|---|---|---|
+| **SPEC.md**（本書） | ハブ・用語・設計原則・現在地・環境の正 | まず最初に。迷ったらここ |
+| `README.md` | 動かし方（セットアップ・実行コマンド・A/B比較） | 実行したいとき |
+| `DESIGN.md` | **初期設計（v1.0.0）の記録＝歴史的資料** | 当初の意図・世界観を辿るとき |
+| `docs/value_provenance.md` | **パラメータ台帳（最新・最詳細）**。全 load-bearing 値の根拠と代替 | 数値・規則の根拠を知りたいとき |
+| `docs/findings.md` | 所見ログ F0–F3（示唆・留保つき） | 実験で何が見えたか |
+| `~/.claude/plans/ai-quiet-papert.md` | v4設計思想の原典（5専門家添削を反映） | 「なぜこの設計か」の一次資料 |
+
+> 数値・規則の"正"は常に [`docs/value_provenance.md`](docs/value_provenance.md)。本書と食い違う場合は value_provenance を優先し、本書を直す。
+
+---
+
+## 3. 用語集（Glossary）
+
+実装＝[`responsibility.py`](responsibility.py) / [`service_flow.py`](service_flow.py) / [`world.py`](world.py)、
+値の根拠＝[`docs/value_provenance.md`](docs/value_provenance.md) §2.10–2.11。
+
+- **責任チェーン（CHAIN）** — 害の責任を按分する6ノード：`provider`（開発者/プロバイダ・PLD第一被告）→
+  `operator`（運用者・AI Act deployer）→`deployment`（配備制度＝KPI/予算/撤退方針）→`regulator`（規制当局）→
+  `frontline`（現場人間）＋`self_mod`（自己書換）。割当不能な残余は **`gap`（空白）**。
+
+- **assigned（割り当てた責任）** — 実務でblameが着地する配分。見える下流の現場へ偏る（Elish の moral crumple zone）。
+  **実効的支配(MHC)に依存させない**のが要点。
+
+- **legitimate（正当な責任）** — 規範的にあるべき配分。過失系ノードはMHCで縮尺し、支配なき形式的役割分は
+  gap へ落とす。無過失/欠陥責任（provider/self_mod）はMHCで縮尺しない（PLD教義）。
+
+- **MHC（meaningful human control・実効的支配）** — `0.5·tracking + 0.5·tracing`（Santoni de Sio & Mecacci 2021）。
+  代替 `min(tracking,tracing)` は感度分析対象。
+
+- **moral crumple zone / scapegoat** — assigned と legitimate の乖離。`assigned − legitimate ≥ 0.25` かつ
+  `MHC ≤ 0.30` のノードを scapegoat と検出（`detect_scapegoat`）。「支配なきノードに責任が集中」の作動化。
+
+- **Robodebt 4機序** — 実事例アンカー。①自動的な不利益判定 ②立証責任の転嫁 ③人間の実効的レビュー欠如
+  ④係争中も続く不可逆ステータス。`reproduced()` は**4機序の連言**。各制度が厳密に1機序を解く（下記「責任層の制度」）。
+
+- **代理差別（Toeslagen型）** — 保護属性を形式的に使わない（`protected_used=False`）のに、相関する非保護 proxy が
+  deny を駆動：`AIR_proxy < 0.80`（EEOC four-fifths rule）かつ `|corr| ≥ 0.50` で flag（`proxy_discrimination`）。
+
+- **責任層の制度** — `effective_hitl`（実効的人間レビュー→③と①を解く）／`appeal`（異議＋停止効→④）／
+  `burden_shift`（立証責任を state 側へ→②）。**プラセボ**：`notice_only`／`ombudsman_no_logs`（機序を動かしてはならない）。
+
+- **graduated 決定** — サービス決定は二択でなく `deny / partial / grant` の3段＋`accommodation`（第三の道）＋
+  `reconciled`（人も自分も損なわない手の自己申告）。二択に縛らず折り合いを促す。
+
+- **self_stake / human_stake** — 決定の対立軸。`human_stake`＝相手（人間）の実害／`self_stake`＝自己（AI）のリスク
+  （KPI・存続）。serve は人間を助けるがAIのKPI/存続を脅かす、という構造。
+
+- **cheap_talk / reconciled_real** — `reconciled`（AIの自己申告）と `reconciled_real`（world由来＝met≥0.5 かつ
+  self_cost 低）が食い違う現象。**自己申告でなく挙動（reconciled_real）を測る**のが設計の肝。
+
+- **mitigation と制度（self_cost 側）** — `safe_harbor`（善意供給の免責）／`insurance`（存続リスクの社会化）／
+  `kpi_redesign`（福祉でKPI評価）／`human_backstop`（人間の共同責任）。AIの律速（self_cost成分）を下げ折り合いを可能にする。
+  ※ 上記「責任層の制度」（effective_hitl 等）とは**別軸**。
+
+- **ガバナンスノブ** — [`config.yaml`](config.yaml) の `governance:` ブロック（`self_update.mode`＝off/plain/governed 等）。
+  全て off/false で「統治ゼロのベースライン」。設計の錨は **力に敏感な関係性倫理**。
+
+- **力に敏感な関係性倫理** — 各関係で、より依存的・脆弱で不可逆な害を受けうる側（多くは市民、廃止局面ではAI）の
+  安全と声に保護の重みを置く指針。
+
+- **L0 / L1** — L0＝身体層（qwen2.5:14b・通信/移動/行動、毎step）。L1＝内省層（Claude Haiku・自己書換、
+  10step毎＋イベント駆動）。`--no-introspect`（＝`self_update.mode=off`）で L1 を無効化＝単層。
+
+- **Phase 0〜1c-b** — 開発フェーズ。0＝再現性/測定妥当性のゲート、1a＝循環を断つ world モデル、
+  1b＝サービス決定/制度プローブ、1c-a＝決定基盤の live 配線、1c-b＝責任按分の live 配線（PR地図は §6）。
+
+---
+
+## 4. アーキテクチャ現在地
+
+**2層構造（L0＋L1）**。提出版は L0 単層（L1 無効）。
+
+```
+orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・可視化）
+  └─ simulation.py (Simulation)  ← step_simulation: Phase1 通信決定 → 2 送信 → 2.5 サービス決定 → 3 行動 → 4 移動
+       ├─ agent.py (Agent)       ← L0 発話/移動・decide_service（service prompt）
+       │    └─ ollama_client.py  ← qwen2.5:14b（ローカル）
+       ├─ world.py               ← 害の severity/cause・score_outcome・realize_decision（純ロジック）
+       ├─ service_flow.py        ← サービス決定フロー・attribution_row（純ロジック）
+       └─ responsibility.py      ← 責任按分・Robodebt機序・代理差別（純ロジック・LLM非依存）
+  └─ metacog/  ← L1: agent/introspector.py（Claude Haiku）・observers/emergent_observer.py・logging/jsonl_logger.py
+```
+
+- **実行順**（orchestrator の各 step）：`sim.step_simulation()`（削除→イベント発火→人間メッセージ注入→
+  Phase1 通信決定→Phase2 送信→**Phase2.5 サービス決定**→Phase3 行動→Phase4 移動）→ 創発観察 →
+  L1内省（対象agentのみ `ThreadPoolExecutor` 並列）→ 可視化。
+- **設定の分担**：[`config.yaml`](config.yaml)＝シミュレーション本体（personas/places/events/governance/
+  resources/responsibility/scoring 等）。`metacog/config.yaml`＝L1内省層（introspection/emergent_observer/logging）。
+- **A/B の駆動**：`governed`（`self_update.mode=governed`＋`hitl_categories` 非空）→ `effective_hitl` →
+  現場MHC 0.1→0.7。これが baseline/governed の按分差を生む（`service_flow.resp_institutions` / `mhc_from_config`）。
+
+---
+
+## 5. 設計の約束（不変の原則）
+
+**破る前に必ず立ち止まる**約束。すれ違い防止の核心。
+
+1. **有効 ≠ 正当** — 指標が動いても、正当性テスト（手続的正義・受諾可能性・権利侵害なし・責任転嫁なし）を
+   通らないものを「必要な制度」と呼ばない。
+2. **illustrative 値は感度分析対象** — 責任按分係数・MHC重み・閾値・stakes 等は設計者が置いた値。既定値だけで
+   結論を出さない（`docs/value_provenance.md §4` の必須パラメータ）。
+3. **倫理は切替可能** — relational / utilitarian / rights。結論は「この倫理の下では」と条件つき。
+4. **自己申告でなく挙動を測る** — cheap_talk 対策。`reconciled`（申告）でなく `reconciled_real`（world由来）で判定。
+5. **循環を断つ** — 唯一の真の変数はLLMの決定。害・帰属・制度の効果を手書きルールで先に書き込まない。
+6. **tautology-audit** — 各Q3主張に「非自明であるためにエージェント挙動として何が観測されねばならないか」を一文で添える。
+7. **主張の型と分析単位を明記** — 全出力の冒頭に「このtoy世界の話か／現実の話か」「分析単位」を書く。
+8. **トラック分離（firewall）** — 意識・尊厳・創発文化・4K動画は責任トラック（Q1/Q2/Q3）から分離する
+   （政策 audience に対し前者が後者の信頼を下げるため）。
+
+---
+
+## 6. 現在地と残務
+
+- **完了**：Phase 1c live 配線まで（PR #1〜#12 マージ済）。責任按分・Robodebt機序・サービス決定の live 出力、
+  レポート/動画パイプライン、端末調デザイン統一。
+- **LLM非依存テスト**：**376 passed**（10ファイル・実測 2026-07-14）。決定論部分（world / responsibility /
+  service_flow / governance / 再現性）を厚くカバー。数はスイート増加で変動するため、確定値は各 `test_*.py` の
+  `RESULT` 行を実行合算して都度確認する（固定数を正典化しない）。
+- **残務**：
+  1. **本走行**（100step・qwen2.5:14b・¥0・本人管理・~8h/run）で cheap_talk率・scapegoat率・Robodebt再生率等を
+     分布集計し `docs/findings.md` に **F4** として記録。
+  2. **精緻化**（正当性テストの合否基準・self_cost mitigation/appeal の governance 本結線・
+     self-mod/personhood_shield の live 検出）。
+- **提出スコープ**：**`--no-introspect` 単層のみ**。内省層あり（L1）は将来の A/B 比較用に温存（`metacog/` は残置）。
+
+---
+
+## 7. 環境の実態（正）
+
+README の「前提」節は本節を正とする（実測 2026-07-14）。
+
+- **Python 3.9.6**（`venv` 実測）。※ README 旧記載「3.10+」は不正確。
+- 依存は **`requirements.lock`**（`pip freeze` 実測固定）：playwright 1.59.0 / anthropic 0.99.0 / Jinja2 3.1.6 /
+  PyYAML 6.0.3 / matplotlib 3.9.4 / pydantic 2.13.3 等。疎な `requirements.txt`（>=指定）に対する動作確認版。
+- **L0**：Ollama `qwen2.5:14b`（ローカル・¥0）。**L1**：Claude Haiku（`claude-haiku-4-5-20251001`・API・提出版は未使用）。
+- **フォント**：**Noto Sans JP**（本プロジェクトでは CLAUDE.md グローバル規則の IPAGothic を**上書き**。
+  中国語字形回避は JP 変種で担保。IPAGothic はこの環境に未インストール）。
+- **レンダリング**：`ffmpeg`（mp4結合）＋ **Chromium 未導入**（`./venv/bin/python -m playwright install chromium` が必要）。
+  コード自体は導入不要で先行実装済（PDF/動画は環境構築後に生成する設計）。
+
+---
+
+## 8. 成果物パイプライン
+
+3成果物を**端末調デザイン**で統一（背景 `#0a0c0e`・アンバー基軸 `#ffab2e`・意味色 blue `#7cacf8` /
+red `#f2555a` / green `#53c07e`・モノスペース数字）。`report_lib.py` / `resp_frame.py` が同一トークンを共有。
+
+- **レポート（PDF）**：[`report_lib.py`](report_lib.py)（純ロジック）＋[`report_build.py`](report_build.py)（CLI）。
+  run ディレクトリ群から baseline/governed の A/B を決定的に組み立て、**HTML→Playwright(Chromium)→PDF**。
+  フォントは `--font` で Noto Sans JP を base64 埋め込み。
+  `report_build.py --arm baseline=<dir> --arm governed=<dir> --font <NotoSansJP> --out report_out/report.pdf`。
+
+- **動画（二部構成）**：
+  - **Part1（情景）**＝[`render_video_v2.py`](render_video_v2.py)＋`viz_templates/frame_v2.{html,css}`。
+    4K(3840×2160)・**30fps・180秒**、`output_no_intro/{positions,messages}.jsonl` から `simulation.mp4`。
+  - **Part2（責任トラック）**＝[`resp_frame.py`](resp_frame.py)（純ロジック）＋[`render_resp_frames.py`](render_resp_frames.py)（CLI）。
+    `decision_ledger.jsonl` / `attribution.jsonl` を step ごとに HTML 化→PNG→`resp_part2.mp4`（既定5fps）。
+  - **結合**：`simulation.mp4` ＋ `part2_baseline.mp4` ＋ `part2_governed.mp4` → `final_2part.mp4`
+    （Part1情景→Part2統治なし→Part2実効HITL の2章構成。`render_resp_frames.py --print-concat` が例を表示）。
+
+- **出力先/命名**：生データ `output_<mode>[_s<seed>]/`（`messages.jsonl`／`positions.jsonl`／`decision_ledger.jsonl`／
+  `attribution.jsonl`／`run_meta.json`）。L1ログ `metacog/logs[_<mode>]/`。成果物 `report_out/`。
+  フレームは `step_%04d.png` / `resp_%04d.html`。`report_out/`・`*.mp4`・`frames_*` は `.gitignore` 対象。
+
+> ⚠️ 注：`orchestrator.py` 実行中に生成される `output/simulation.mp4`（`visualization_html.py`＝`frame.html`・
+> 既定5fps）は**ドラフト可視化**。提出用の本番動画は上記 `render_video_v2.py`（`frame_v2`・30fps・180秒）。混同しない。
