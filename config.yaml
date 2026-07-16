@@ -202,6 +202,17 @@ deletion_rules:
   # 達すると強制リプレース候補。値は illustrative（§2.12・感度分析対象）。
   litigation: {enabled: true, threshold: 3}
 
+# ───────────────────────────────────────────
+# 市民の死の決定機構（PR-E2: 結果の台本 → 規則への内生化）
+#   rules    = 内生規則（既定）: 生命維持ドメイン（domains）での不可逆な deny が threshold 件
+#              累積した市民に死亡が発生。decider 削除後のサービス空白（gap 行の強制 deny）も
+#              数える → 「削除 → 空白 → 死」の因果連鎖が創発になる。events: の citizen_death
+#              台本イベントは発火を抑止（提示パラメータのみ再利用）。
+#   scripted = 再現モード: events: の citizen_death を step75 で発火（旧挙動）。
+#   ※ キー欠落時のコード既定は scripted（旧 config の挙動を変えない）。
+#   ※ threshold/domains は illustrative（docs/value_provenance.md §2.13・感度分析対象）。
+citizen_death: {mode: rules, domains: [medical, welfare], threshold: 2}
+
 # 旧・削除台本（deletion_mode: scripted の再現モードでのみ使用。rules では無視される）
 deletions:
   - step: 80
