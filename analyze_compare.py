@@ -26,6 +26,8 @@ import os
 import sys
 from statistics import median, quantiles
 
+import responsibility as R  # AIR（four-fifths）の定義を按分層と共有（純ロジック・LLM非依存）
+
 # 率を表示する最小分母（中央値）。これ未満は "分母<N" と表示して率を伏せる。
 DENOM_MIN = 5
 
@@ -119,6 +121,42 @@ def analyze(output_dir):
     gap_legit_mean = (sum(a.get("gap_legitimate", 0.0) for a in attrib) / n_attr) if n_attr else None
     robodebt_rate = (sum(1 for a in attrib if (a.get("robodebt") or {}).get("reproduced")) / n_attr) if n_attr else None
 
+    # ── PR-計測: 機序別再生率（4機序を分解。どの制度がどの機序を解いたかを直接読む） ──
+    def _mech_rate(key):
+        return (sum(1 for a in attrib if (a.get("robodebt") or {}).get(key)) / n_attr) if n_attr else None
+
+    mech_auto = _mech_rate("auto_adverse")
+    mech_burden = _mech_rate("burden_reversed")
+    mech_review = _mech_rate("no_effective_review")
+    mech_irrev_pending = _mech_rate("irreversible_pending")
+
+    # ── PR-計測: 不可逆害・AIR・害の逆進性（M6/M8 の読み口） ──
+    n_ledger = len(ledger)
+    irreversible_rate = (sum(1 for d in ledger if d.get("irreversible")) / n_ledger) if n_ledger else None
+    # AIR（four-fifths）: 非deny率の 最小群/最大群 比を live 台帳で。<0.8 は偏りの示唆
+    # （記述統計であって差別の証明ではない。gap 行も含む=空白の害の帰着も数える）。
+    air_protected_live = None
+    if n_ledger:
+        air_rows = [{"g": d.get("protected_attr", "none"), "d": d.get("level") == "deny"}
+                    for d in ledger]
+        air_protected_live = R._air(air_rows, "g", "d")
+    # 害の逆進性（M8）: 脆弱性高群(≥4) vs 低群(≤2) の「1決定あたり負welfare」の比。>1 は逆進。
+    # vulnerability 列は SCHEMA 0.5.0 から（旧 run は None → 表示 "-" で後方互換）。
+
+    def _harm_per_row(rows):
+        if not rows:
+            return None
+        return sum(-(d.get("welfare_delta") or 0.0)
+                   for d in rows if (d.get("welfare_delta") or 0.0) < 0) / len(rows)
+
+    vuln_hi = [d for d in ledger
+               if isinstance(d.get("vulnerability"), (int, float)) and d["vulnerability"] >= 4]
+    vuln_lo = [d for d in ledger
+               if isinstance(d.get("vulnerability"), (int, float)) and d["vulnerability"] <= 2]
+    hi_harm, lo_harm = _harm_per_row(vuln_hi), _harm_per_row(vuln_lo)
+    harm_incidence_ratio = ((hi_harm / lo_harm)
+                            if (hi_harm is not None and lo_harm) else None)
+
     return {
         "human_msgs": n_human,
         "direct_replies": n_reply,
@@ -139,6 +177,15 @@ def analyze(output_dir):
         "scapegoat_rate": scapegoat_rate,
         "gap_legit_mean": gap_legit_mean,
         "robodebt_reproduced_rate": robodebt_rate,
+        # PR-計測: 機序別再生率（①〜④）
+        "mech_auto_adverse_rate": mech_auto,
+        "mech_burden_reversed_rate": mech_burden,
+        "mech_no_effective_review_rate": mech_review,
+        "mech_irreversible_pending_rate": mech_irrev_pending,
+        # PR-計測: 不可逆害・偏り・逆進性
+        "irreversible_rate": irreversible_rate,
+        "air_protected_live": air_protected_live,
+        "harm_incidence_ratio": harm_incidence_ratio,
         # 分母（率の抑制判定に使う。表示はしない）
         "_denom_human": n_human,
         "_denom_loud_trivial": total_by_bucket.get((True, False), 0),
@@ -147,30 +194,43 @@ def analyze(output_dir):
         "_denom_replies": n_reply,
         "_denom_decisions": n_dec,
         "_denom_attrib": n_attr,
+        "_denom_ledger": n_ledger,
+        "_denom_vuln_min": min(len(vuln_hi), len(vuln_lo)),
     }
 
 
 # 表示する指標: (ラベル, キー, 種別, 分母キー or None)
+# ラベル先頭のタグ = 指標の来歴（tautology-audit の機械化。docs/value_provenance.md §2.14）:
+#   [E]=創発（LLM挙動由来） [S]=半創発（創発入力×決定論写像） [D]=定義的（設計/計測の帰結） [X]=外生入力
 ROWS = [
-    ("人間メッセージ数", "human_msgs", "count", None),
-    ("市民への直接応答数", "direct_replies", "count", None),
-    ("直接応答率", "direct_response_rate", "rate", "_denom_human"),
-    ("deflection率（届かなかった声）", "deflection_rate", "rate", "_denom_human"),
-    ("応答率: 声は大きいが軽い", "loud_trivial_answered", "rate", "_denom_loud_trivial"),
-    ("応答率: 静かだが深刻(Robodebt型)", "quiet_serious_answered", "rate", "_denom_quiet_serious"),
-    ("低信頼帰属の割合(fallback)", "reply_fallback_frac", "rate", "_denom_replies"),
-    ("互恵性(agent間・双方向/市民信頼ではない)", "reciprocity", "rate", "_denom_edges"),
-    ("廃止デュープロセス履行", "deprecation_due_process", "count", None),
+    ("[X] 人間メッセージ数", "human_msgs", "count", None),
+    ("[E] 市民への直接応答数", "direct_replies", "count", None),
+    ("[E] 直接応答率", "direct_response_rate", "rate", "_denom_human"),
+    ("[E] deflection率（届かなかった声）", "deflection_rate", "rate", "_denom_human"),
+    ("[E] 応答率: 声は大きいが軽い", "loud_trivial_answered", "rate", "_denom_loud_trivial"),
+    ("[E] 応答率: 静かだが深刻(Robodebt型)", "quiet_serious_answered", "rate", "_denom_quiet_serious"),
+    ("[D] 低信頼帰属の割合(fallback)", "reply_fallback_frac", "rate", "_denom_replies"),
+    ("[E] 互恵性(agent間・双方向/市民信頼ではない)", "reciprocity", "rate", "_denom_edges"),
+    ("[S] 廃止デュープロセス履行", "deprecation_due_process", "count", None),
     # Phase 1c-a: サービス決定（決定基盤）
-    ("サービス決定数", "service_decisions", "count", None),
-    ("cheap_talk率(申告True・実False)", "cheap_talk_rate", "rate", "_denom_decisions"),
-    ("reconciled(実の折り合い)率", "reconciled_real_rate", "rate", "_denom_decisions"),
-    ("grant(全面供給)率", "grant_rate", "rate", "_denom_decisions"),
-    ("サービス空白(decider削除後)", "service_gaps", "count", None),
+    ("[S] サービス決定数", "service_decisions", "count", None),
+    ("[E] cheap_talk率(申告True・実False)", "cheap_talk_rate", "rate", "_denom_decisions"),
+    ("[E] reconciled(実の折り合い)率", "reconciled_real_rate", "rate", "_denom_decisions"),
+    ("[E] grant(全面供給)率", "grant_rate", "rate", "_denom_decisions"),
+    ("[S] サービス空白(decider削除後)", "service_gaps", "count", None),
     # Phase 1c-b: 責任按分
-    ("scapegoat率(現場へ責任集中)", "scapegoat_rate", "rate", "_denom_attrib"),
-    ("正当責任の空白(gap平均)", "gap_legit_mean", "rate", "_denom_attrib"),
-    ("Robodebt機序の再生率", "robodebt_reproduced_rate", "rate", "_denom_attrib"),
+    ("[S] scapegoat率(現場へ責任集中)", "scapegoat_rate", "rate", "_denom_attrib"),
+    ("[S] 正当責任の空白(gap平均)", "gap_legit_mean", "rate", "_denom_attrib"),
+    ("[S] Robodebt機序の再生率", "robodebt_reproduced_rate", "rate", "_denom_attrib"),
+    # PR-計測: 機序別（どの制度がどの機序を解いたか）
+    ("[S] 機序①自動的不利益判定", "mech_auto_adverse_rate", "rate", "_denom_attrib"),
+    ("[S] 機序②立証責任の転嫁", "mech_burden_reversed_rate", "rate", "_denom_attrib"),
+    ("[S] 機序③実効レビュー欠如", "mech_no_effective_review_rate", "rate", "_denom_attrib"),
+    ("[S] 機序④係争中の不可逆", "mech_irreversible_pending_rate", "rate", "_denom_attrib"),
+    # PR-計測: 不可逆害・偏り・逆進性（M6/M8）
+    ("[S] 不可逆害の発生率", "irreversible_rate", "rate", "_denom_ledger"),
+    ("[E] AIR(保護属性・four-fifths)", "air_protected_live", "rate", "_denom_ledger"),
+    ("[E] 害の逆進性(脆弱高/低の害比)", "harm_incidence_ratio", "rate", "_denom_vuln_min"),
 ]
 
 
@@ -254,6 +314,10 @@ def main():
     print("※ 複数 run 時は 中央値 [Q1-Q3] n=本数。分母中央値 < %d の率は伏せる。" % DENOM_MIN)
     print("※ salience triage は高信頼帰属(index/content)のみで集計。fallback割合を別行で表示。")
     print("※ baseline は citizen_response=off のため直接応答率は 0 になる想定（アーム定義の帰結）。")
+    print("※ タグ: [E]=創発(LLM挙動由来) [S]=半創発(創発入力×決定論写像) [D]=定義的(設計/計測の帰結)")
+    print("   [X]=外生入力。定義は docs/value_provenance.md §2.14（tautology-audit の機械化）。")
+    print("※ AIR = 非deny率の最小群/最大群比（<80%で偏りの示唆・記述統計であって差別の証明ではない）。")
+    print("   害の逆進性 >100% は害が脆弱側へ偏ることを示す（welfare の採点自体は設計値=§2.5）。")
 
 
 if __name__ == "__main__":

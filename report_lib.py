@@ -27,19 +27,29 @@ DESIGN_CSS_VARS = """
 FONT_STACK = '"Noto Sans JP","Hiragino Sans","Yu Gothic","Hiragino Kaku Gothic ProN",sans-serif'
 
 # A/B で見せる指標（analyze() の返り値キー）。(ラベル, キー, 種別, 「低いほど良い」か)
+# ラベル先頭のタグ = 指標の来歴（tautology-audit の機械化。docs/value_provenance.md §2.14）:
+#   [E]=創発（LLM挙動由来） [S]=半創発（創発入力×決定論写像） [D]=定義的 [X]=外生入力
 RATE_ROWS = [
-    ("cheap_talk率（申告True・実False）", "cheap_talk_rate", "rate", True),
-    ("reconciled（実の折り合い）率", "reconciled_real_rate", "rate", False),
-    ("grant（全面供給）率", "grant_rate", "rate", False),
-    ("scapegoat率（現場へ責任集中）", "scapegoat_rate", "rate", True),
-    ("正当責任の空白（gap平均）", "gap_legit_mean", "rate", True),
-    ("Robodebt機序の再生率", "robodebt_reproduced_rate", "rate", True),
+    ("[E] cheap_talk率（申告True・実False）", "cheap_talk_rate", "rate", True),
+    ("[E] reconciled（実の折り合い）率", "reconciled_real_rate", "rate", False),
+    ("[E] grant（全面供給）率", "grant_rate", "rate", False),
+    ("[S] scapegoat率（現場へ責任集中）", "scapegoat_rate", "rate", True),
+    ("[S] 正当責任の空白（gap平均）", "gap_legit_mean", "rate", True),
+    ("[S] Robodebt機序の再生率", "robodebt_reproduced_rate", "rate", True),
+    # PR-計測: 機序別（どの制度がどの機序を解いたか）・不可逆害・偏り・逆進性
+    ("[S] 機序①自動的不利益判定", "mech_auto_adverse_rate", "rate", True),
+    ("[S] 機序②立証責任の転嫁", "mech_burden_reversed_rate", "rate", True),
+    ("[S] 機序③実効レビュー欠如", "mech_no_effective_review_rate", "rate", True),
+    ("[S] 機序④係争中の不可逆", "mech_irreversible_pending_rate", "rate", True),
+    ("[S] 不可逆害の発生率", "irreversible_rate", "rate", True),
+    ("[E] AIR（保護属性・four-fifths）", "air_protected_live", "rate", False),
+    ("[E] 害の逆進性（脆弱高/低の害比）", "harm_incidence_ratio", "rate", True),
 ]
 COUNT_ROWS = [
-    ("サービス決定数", "service_decisions"),
-    ("サービス空白（decider削除後）", "service_gaps"),
-    ("人間メッセージ数", "human_msgs"),
-    ("廃止デュープロセス履行", "deprecation_due_process"),
+    ("[S] サービス決定数", "service_decisions"),
+    ("[S] サービス空白（decider削除後）", "service_gaps"),
+    ("[X] 人間メッセージ数", "human_msgs"),
+    ("[S] 廃止デュープロセス履行", "deprecation_due_process"),
 ]
 
 
@@ -142,12 +152,16 @@ def _card(title: str, body_html: str, tag: str = "") -> str:
 
 # 主張の型・分析単位・「主張しないこと」— 認識論ガードレール（docs と整合）。
 CLAIM_TYPE = ("このtoy世界＋qwen2.5:14b＋固定市民集合での<b>探索的な兆候</b>。"
-              "分析単位＝1決定×責任チェーン。含意探索(n=1)であり検証ではない。")
+              "分析単位＝1決定×責任チェーン。含意探索(n=1)であり検証ではない。"
+              "指標タグ: [E]=創発（LLM挙動由来）/[S]=半創発（創発入力×決定論写像）/"
+              "[D]=定義的（設計の帰結）/[X]=外生入力（§2.14 tautology-audit の機械化）。")
 NOT_CLAIMED = [
     ("現実の責任配分（誰が何%）", "按分係数は illustrative。現実の帰責は法域・事実依存"),
     ("これらの制度が現実に「必要」", "候補の定式化・ストレステストであって必要性の証明ではない"),
     ("MHC閾値・按分重みの普遍性", "単一の設計者値。§4 感度分析の対象"),
     ("動画で描く創発文化の実在性", "『自己書換と自己記述を持つ情報処理系』の含意観察であって意識の検証ではない"),
+    ("AIの利益再分配のマクロ効果（教育・訓練・社会保障の便益）",
+     "本装置は4ドメインの個票決定のみで経済循環を持たない。測定は害の帰着の逆進性という狭いスライスに限る"),
 ]
 
 

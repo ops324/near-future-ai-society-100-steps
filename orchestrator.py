@@ -221,6 +221,9 @@ def main():
     parser.add_argument("--governance-mode", choices=["as-config", "baseline", "governed"],
                         default="as-config",
                         help="ガバナンス・プリセット（比較用）: as-config=config.yamlのまま / baseline=統治なし / governed=統治あり")
+    parser.add_argument("--resp-institutions", type=str, default=None,
+                        help='責任層の制度をカンマ区切りで上書き（例: "appeal" / "appeal,burden_shift" / ""=空）。'
+                             'config responsibility.resp_institutions より優先。多アーム実験の切替用')
     args = parser.parse_args()
 
     # 乱数シード（指定されたら numpy/Python random どちらも固定）
@@ -248,8 +251,13 @@ def main():
     # シミュレーション初期化（--governance-mode のプリセットがあれば config を上書き）
     from simulation import governance_preset
     gov_override = governance_preset(args.governance_mode)
+    # PR-計測: 責任層の制度アーム切替（"a,b" → [a, b] / "" → []）
+    resp_insts = None
+    if args.resp_institutions is not None:
+        resp_insts = [s.strip() for s in args.resp_institutions.split(",") if s.strip()]
     sim = Simulation(config_path=args.sim_config, output_dir=args.output_dir,
-                     governance_override=gov_override, seed=args.seed)
+                     governance_override=gov_override, seed=args.seed,
+                     resp_institutions_override=resp_insts)
     if args.governance_mode != "as-config":
         logger.info(f"Governance preset applied: {args.governance_mode}")
     if args.duration:
