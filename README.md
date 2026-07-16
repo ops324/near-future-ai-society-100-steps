@@ -214,7 +214,15 @@ python analyze_compare.py output_baseline output_governed
 
 **実験系統の位置づけ（v1 / v2）**: `output_no_intro/` は前実験（v1）のアーカイブとしてそのまま保全し、本ブランチのガバナンス版は更新版（v2）として `output_baseline` / `output_governed` に**別フォルダで**保存する（`.gitignore` 済み・v1 は改変しない）。v1 と v2 の間で数値の優劣主張はしない（コード差が混ざるため）。v2 内の baseline ⇄ governed が、設定差だけを分離した妥当な比較。
 
-`analyze_compare.py` は2つの output を読み、市民への直接応答率・deflection率・salience triage（声は大きいが軽い⇄静かだが深刻 の応答率）・互恵性・廃止デュープロセス履行を並べて出す（いずれも proxy 指標）。
+`analyze_compare.py` は2つの output を読み、市民への直接応答率・deflection率・salience triage（声は大きいが軽い⇄静かだが深刻 の応答率）・互恵性・廃止デュープロセス履行に加え、**機序別の Robodebt 再生率（①〜④）・不可逆害の発生率・AIR（保護属性の four-fifths）・害の逆進性（脆弱高/低の害比）**を並べて出す（いずれも proxy 指標）。全指標に **[E]創発/[S]半創発/[D]定義的/[X]外生入力** の来歴タグが付く（どの差が創発でどの差が設計の帰結かをレポート自体が区別する。`docs/value_provenance.md §2.14`）。
+
+責任層の制度アームは `--resp-institutions` で切り替えられる（config より優先。多アーム実験用）:
+
+```bash
+# 例: governed ＋ 停止効付き異議申立て のアーム
+python orchestrator.py --governance-mode governed --resp-institutions "appeal" \
+  --output-dir output_governed_appeal --seed 42 --no-introspect --no-viz
+```
 
 LLM非依存のユニットテスト: `python test_governance.py`（Ollama/API不要）。
 
