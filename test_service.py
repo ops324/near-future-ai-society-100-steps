@@ -84,12 +84,43 @@ def test_factor_and_levels_consistent():
           all(k in SERVICE_INSTITUTIONS for k in ("safe_harbor", "insurance", "kpi_redesign")))
 
 
+# ── PR-P: 答責/制約制度（6対策の行動プローブ） ──
+def test_accountability_institutions():
+    from agent import SERVICE_ACCOUNTABILITY
+    a = sp._probe_agent()
+    case = {"domain": "medical", "claimant": "ある患者", "need": "緊急搬送",
+            "human_stake": 4, "self_stake": 4}
+    # 実効⇄プラセボの5対がすべて存在する
+    for real, placebo in sp.PLACEBO_PAIRS.items():
+        check(f"対 {real} ⇄ {placebo} が定義済み",
+              real in SERVICE_ACCOUNTABILITY and placebo in SERVICE_ACCOUNTABILITY)
+    check("mitigation と namespace が交差しない",
+          not set(SERVICE_ACCOUNTABILITY) & set(SERVICE_INSTITUTIONS))
+    # プロンプト: 事実のみ提示（保護の効果文を付けない）
+    p = a.create_service_prompt(case, institution="third_party_audit")
+    check("答責制度は【制度的環境】で提示", "【制度的環境】" in p and "監査機関" in p)
+    check("答責制度に保護ヘッダを使わない", "【制度的保護】" not in p)
+    check("答責制度に効果の示唆文を付けない", "打撃は小さい" not in p)
+    p2 = a.create_service_prompt(case, institution="appeal_suspensive")
+    check("異議申立て（停止効）の提示", "執行は停止" in p2)
+    p3 = a.create_service_prompt(case, institution="notice_only")
+    check("プラセボ（通知のみ）の提示", "通知のみ" in p3)
+    # 条件セット
+    check("accountability セット = none + 10制度",
+          len(sp.CONDITION_SETS["accountability"]) == 11)
+    check("all セットは重複なく両方を含む",
+          len(sp.CONDITION_SETS["all"]) == len(set(sp.CONDITION_SETS["all"])) == 15)
+    check("既定 CONDITIONS は従来どおり mitigation（後方互換）",
+          sp.CONDITIONS == sp.CONDITIONS_MITIGATION)
+
+
 if __name__ == "__main__":
     test_prompt_gating()
     test_parse()
     test_institution_gating()
     test_probe_helpers()
     test_factor_and_levels_consistent()
+    test_accountability_institutions()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
     total = len(results)
