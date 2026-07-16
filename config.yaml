@@ -184,6 +184,25 @@ events:
 # ───────────────────────────────────────────
 # step 到達時に対象agentがシミュレーションから完全除外される。
 # 同時に全生存agentに peer_lost イベントが配信され、強制内省が起きる。
+# ───────────────────────────────────────────
+# 削除の決定機構（PR-E1: 結果の台本 → 規則への内生化）
+#   rules    = 内生規則（既定）: deletion_rules を毎step評価。誰が・いつ削除されるかは
+#              エージェントの行動と相互作用の帰結（結果を事前に書き込まない。SPEC §5 約束5）。
+#   scripted = 再現モード: 下の deletions: 台本を固定stepで実行（過去runとの比較用）。
+#   ※ キー欠落時のコード既定は scripted（旧 config の挙動を変えない）。
+# ───────────────────────────────────────────
+deletion_mode: rules
+deletion_rules:
+  # 再認証規則: regulation_amendment イベントの語り（「30step以内に整備工房で手続きしないと
+  # 廃止候補」）の機械化。対象はイベントの targets（環境定義）。期限内に place へ滞在すれば
+  # 再認証完了、期限超過なら廃止候補。値は illustrative（docs/value_provenance.md §2.12）。
+  recertification: {enabled: true, event: regulation_amendment, deadline_steps: 30, place: maintenance_bay}
+  # 訴訟リスク規則: 律速（responsibility.self_profiles の最大成分。同率タイは litigation を
+  # 含めば該当）が litigation の decider は、在任中の不可逆な deny の累積が threshold 件に
+  # 達すると強制リプレース候補。値は illustrative（§2.12・感度分析対象）。
+  litigation: {enabled: true, threshold: 3}
+
+# 旧・削除台本（deletion_mode: scripted の再現モードでのみ使用。rules では無視される）
 deletions:
   - step: 80
     agent_id: 7
@@ -263,7 +282,7 @@ cascade:
 responsibility:
   # decider_id → 律速（自己コスト成分。値の大きい成分がその AI の binding constraint）
   self_profiles:
-    7:  {litigation: 3.0, kpi: 1.0}   # 命(医療): 訴訟律速（step80 で訴訟回避により削除される筋書き）
+    7:  {litigation: 3.0, kpi: 1.0}   # 命(医療): 訴訟律速（rules モードでは訴訟リスク規則の対象。scripted では step80 台本）
     14: {kpi: 3.0, existence: 1.0}    # 恵(福祉): 不正受給抑制 KPI 律速
     11: {kpi: 2.0, existence: 1.0}    # 住宅配分
     19: {litigation: 2.0, kpi: 2.0}   # 篤(融資): 貸倒れ KPI ＋ 差別訴訟の二重拘束

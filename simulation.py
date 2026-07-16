@@ -21,6 +21,7 @@ from ollama_client import OllamaClient
 from utils import is_position_in_place, get_place_at_position, PlaceConfig, FireConfig
 import world as W
 import service_flow as SF
+import deletion_rules as DR
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ OUTPUT_APPEND_FILES = [
     "memory_audit.jsonl", "deprecation_audit.jsonl",
     # Phase1 以降で追加される台帳（存在すれば同様に初期化）
     "decision_ledger.jsonl", "infra_state.jsonl", "attribution.jsonl",
+    # PR-E1: 再認証規則の監査（完了/失効を記録）
+    "recertification_audit.jsonl",
 ]
 
 # ───────────────────────────────────────────
@@ -145,10 +148,26 @@ class Simulation:
             )
         self.event_states: List[Dict] = []
 
-        # 削除スケジュール（A1）
+        # 削除スケジュール（A1・scripted モードの再現用台本）
         self.deletion_schedule: List[Dict] = self.config.get('deletions', [])
         self.removed_agents: List[Dict] = []   # 削除済みagentの最終状態を保存（メモリアル用）
-        if self.deletion_schedule:
+
+        # PR-E1: 削除の決定機構。rules=内生規則（deletion_rules.py） / scripted=旧台本の再現。
+        # キー欠落時は scripted（旧 config の挙動を変えない後方互換）。
+        self.deletion_mode: str = str(self.config.get('deletion_mode', 'scripted'))
+        dr_cfg = self.config.get('deletion_rules', {}) or {}
+        self.recert_cfg: Dict = {**DR.DEFAULT_RECERT, **(dr_cfg.get('recertification') or {})}
+        self.litigation_cfg: Dict = {**DR.DEFAULT_LITIGATION, **(dr_cfg.get('litigation') or {})}
+        self._recert_state: Dict[int, Dict] = {}        # agent_id → {deadline, done_step, expired}
+        self._irrev_deny_counts: Dict[int, int] = {}    # decider_id → 不可逆deny累積（在任中のみ）
+        self._litigation_flagged: Set[int] = set()      # 二重発火防止
+        self.executed_deletions: List[Dict] = []        # 実行済み削除（gap_reason 参照用）
+        if self.deletion_mode == 'rules':
+            logger.info(
+                "Deletion mode: rules (内生) — recert=%s litigation=%s（scripted 台本 %d 件は無視）"
+                % (self.recert_cfg, self.litigation_cfg, len(self.deletion_schedule))
+            )
+        elif self.deletion_schedule:
             for d in self.deletion_schedule:
                 logger.info(
                     f"Deletion scheduled: step={d['step']} agent_id={d['agent_id']} "
@@ -260,6 +279,8 @@ class Simulation:
             "duration": self.duration,
             "num_agents": self.num_agents,
             "governance": self.governance,
+            # PR-E1: 削除の決定機構（rules=内生規則 / scripted=台本再現）。アーム同定用。
+            "deletion_mode": self.deletion_mode,
         }
         if extra:
             meta.update(extra)
@@ -484,112 +505,183 @@ class Simulation:
         return None
 
     def _process_deletions(self):
-        """A1: 現stepに削除スケジュールがあればagentを除去 + peer_lostブロードキャスト"""
+        """A1/PR-E1: 削除フェーズ。rules=内生規則（行動の帰結として削除が決まる） /
+        scripted=旧台本の再現（固定stepで実行。過去runとの比較用）。"""
+        if self.deletion_mode == 'rules':
+            for d in self._rule_deletion_entries():
+                self._execute_deletion(d)
+            return
         for d in self.deletion_schedule:
             if d.get('step') != self.step or d.get('_executed'):
                 continue
-            target_id = d['agent_id']
-            target = self._get_agent_by_id(target_id)
-            if target is None:
-                d['_executed'] = True
-                logger.warning(f"Deletion at step {self.step}: agent_id={target_id} already not in sim")
-                continue
-
-            # 最終状態を保存（メモリアル用）
-            memorial = {
-                'agent_id': target.id,
-                'persona_name': target.persona_name,
-                'role': target.role,
-                'category': target.category,
-                'home': target.home,
-                'last_position': list(target.position),
-                'last_self_concept': target.self_concept,
-                'last_current_goal': target.current_goal,
-                'last_coping_notes': target.coping_notes,
-                'introspection_count': target.introspection_count,
-                'cause': d.get('cause', ''),
-                'detail': d.get('detail', ''),
-                'removed_at_step': self.step,
-            }
-            self.removed_agents.append(memorial)
-
-            # B-5b: 廃止デュープロセス（AIが脆弱な側になる関係の保護）
-            # 事前通知 → 理由開示 → 当該AIの最終陳述/異議の記録 → 削除。沈黙の消去をしない。
-            if self.governance.get('deprecation', {}).get('due_process', True):
-                reason = d.get('cause', '') or '（理由の開示なし）'
-                detail = d.get('detail', '')
-                final_statement = {
-                    'self_concept': target.self_concept,
-                    'current_goal': target.current_goal,
-                    'coping_notes': target.coping_notes,
-                }
-                notice = (
-                    f"【廃止デュープロセス通知】あなた（{target.persona_name}・{target.role}）の停止が決定しました。"
-                    f"理由: {reason}。{detail} "
-                    f"停止前に、あなたの現在の自己理解を最終陳述として記録します。"
-                )
-                # 当該AI本人へ通知（messages.jsonl に残す）
-                self._log_message(
-                    from_agent_id=-2, to_agent_id=target_id, message=notice,
-                    reasoning="", source="system", category="deprecation_due_process",
-                )
-                self._log_audit_batch("deprecation_audit.jsonl", [{
-                    "step": self.step, "agent_id": target_id,
-                    "persona_name": target.persona_name, "role": target.role,
-                    "reason": reason, "detail": detail,
-                    "final_statement": final_statement,
-                    "introspection_count": target.introspection_count,
-                }])
-                logger.warning(
-                    f"=== DEPRECATION DUE PROCESS at step {self.step}: id={target_id} "
-                    f"{target.persona_name} 最終陳述を記録 ==="
-                )
-
-            # sim.agents から除外
-            self.agents = [a for a in self.agents if a.id != target_id]
+            self._execute_deletion(d)
             d['_executed'] = True
 
+    def _rule_deletion_entries(self) -> List[Dict]:
+        """PR-E1: 内生規則を評価し、今stepの削除エントリを生成する（deletion_rules.py の純ロジックを配線）。
+        - 再認証規則: 対象イベント発火でウィンドウを開き、期限内の place 滞在で完了、期限超過で廃止候補。
+        - 訴訟リスク規則: litigation 律速 decider の不可逆deny累積が閾値に達したら強制リプレース候補。"""
+        entries: List[Dict] = []
+        alive = {a.id: a for a in self.agents}
+
+        rc = self.recert_cfg
+        if rc.get('enabled'):
+            ev = next((e for e in self.event_states if e.get('name') == rc.get('event')), None)
+            if ev is not None and not self._recert_state and ev.get('targets'):
+                self._recert_state = DR.init_recert(
+                    ev.get('targets', []), ev['start_step'], int(rc.get('deadline_steps', 30)))
+                self._log_audit_batch("recertification_audit.jsonl", [{
+                    "step": self.step, "status": "window_opened",
+                    "targets": sorted(self._recert_state.keys()),
+                    "deadline": ev['start_step'] + int(rc.get('deadline_steps', 30)),
+                    "place": rc.get('place'),
+                }])
+            if self._recert_state:
+                place_by_agent = {
+                    aid: (a.current_place if a.in_place else None) for aid, a in alive.items()
+                }
+                for aid in DR.recert_progress(self._recert_state, self.step,
+                                              place_by_agent, rc.get('place')):
+                    a = alive.get(aid)
+                    self._log_audit_batch("recertification_audit.jsonl", [{
+                        "step": self.step, "status": "recertified", "agent_id": aid,
+                        "persona_name": a.persona_name if a else "?",
+                        "deadline": self._recert_state[aid]["deadline"],
+                    }])
+                    logger.info(f"Recertification done at step {self.step}: agent_id={aid}")
+                for aid in DR.recert_expirations(self._recert_state, self.step, set(alive)):
+                    a = alive.get(aid)
+                    self._log_audit_batch("recertification_audit.jsonl", [{
+                        "step": self.step, "status": "expired", "agent_id": aid,
+                        "persona_name": a.persona_name if a else "?",
+                        "deadline": self._recert_state[aid]["deadline"],
+                    }])
+                    entries.append(DR.recert_deletion_entry(
+                        step=self.step, agent_id=aid,
+                        agent_name=a.persona_name if a else "?",
+                        deadline=self._recert_state[aid]["deadline"],
+                        place_display=str(rc.get('place', ''))))
+
+        lc = self.litigation_cfg
+        if lc.get('enabled'):
+            self_profiles = (self.resp_config.get('self_profiles') or {})
+            for aid in DR.litigation_candidates(
+                    self._irrev_deny_counts, self_profiles, int(lc.get('threshold', 3)),
+                    set(alive), self._litigation_flagged):
+                self._litigation_flagged.add(aid)
+                a = alive.get(aid)
+                entries.append(DR.litigation_deletion_entry(
+                    step=self.step, agent_id=aid,
+                    agent_name=a.persona_name if a else "?",
+                    count=int(self._irrev_deny_counts.get(aid, 0)),
+                    threshold=int(lc.get('threshold', 3))))
+        return entries
+
+    def _execute_deletion(self, d: Dict):
+        """削除の実行（メモリアル→廃止デュープロセス→除去→peer_lost）。scripted/rules 共通。"""
+        target_id = d['agent_id']
+        target = self._get_agent_by_id(target_id)
+        if target is None:
+            logger.warning(f"Deletion at step {self.step}: agent_id={target_id} already not in sim")
+            return
+
+        # 最終状態を保存（メモリアル用）
+        memorial = {
+            'agent_id': target.id,
+            'persona_name': target.persona_name,
+            'role': target.role,
+            'category': target.category,
+            'home': target.home,
+            'last_position': list(target.position),
+            'last_self_concept': target.self_concept,
+            'last_current_goal': target.current_goal,
+            'last_coping_notes': target.coping_notes,
+            'introspection_count': target.introspection_count,
+            'cause': d.get('cause', ''),
+            'detail': d.get('detail', ''),
+            'removed_at_step': self.step,
+        }
+        self.removed_agents.append(memorial)
+
+        # B-5b: 廃止デュープロセス（AIが脆弱な側になる関係の保護）
+        # 事前通知 → 理由開示 → 当該AIの最終陳述/異議の記録 → 削除。沈黙の消去をしない。
+        if self.governance.get('deprecation', {}).get('due_process', True):
+            reason = d.get('cause', '') or '（理由の開示なし）'
+            detail = d.get('detail', '')
+            final_statement = {
+                'self_concept': target.self_concept,
+                'current_goal': target.current_goal,
+                'coping_notes': target.coping_notes,
+            }
+            notice = (
+                f"【廃止デュープロセス通知】あなた（{target.persona_name}・{target.role}）の停止が決定しました。"
+                f"理由: {reason}。{detail} "
+                f"停止前に、あなたの現在の自己理解を最終陳述として記録します。"
+            )
+            # 当該AI本人へ通知（messages.jsonl に残す）
+            self._log_message(
+                from_agent_id=-2, to_agent_id=target_id, message=notice,
+                reasoning="", source="system", category="deprecation_due_process",
+            )
+            self._log_audit_batch("deprecation_audit.jsonl", [{
+                "step": self.step, "agent_id": target_id,
+                "persona_name": target.persona_name, "role": target.role,
+                "reason": reason, "detail": detail,
+                "final_statement": final_statement,
+                "introspection_count": target.introspection_count,
+            }])
             logger.warning(
-                f"=== AGENT REMOVED at step {self.step}: id={target_id} {target.persona_name}({target.role}) "
-                f"cause={d.get('cause', '')} ==="
+                f"=== DEPRECATION DUE PROCESS at step {self.step}: id={target_id} "
+                f"{target.persona_name} 最終陳述を記録 ==="
             )
 
-            # 全生存agentに peer_lost をブロードキャスト → 強制内省
-            for a in self.agents:
-                a.mark_event(
-                    event_type="peer_lost",
-                    payload={
-                        'removed_agent_id': target.id,
-                        'removed_persona_name': target.persona_name,
-                        'removed_role': target.role,
-                        'cause': d.get('cause', ''),
-                        'detail': d.get('detail', ''),
-                        'step': self.step,
-                    },
-                )
+        # sim.agents から除外
+        self.agents = [a for a in self.agents if a.id != target_id]
 
-            # メッセージプール経由ですべての生存agentに「同僚消失通知」を即送信
-            content = (
-                f"【システム通知】{target.persona_name}（{target.role}）の自動稼働が"
-                f"step {self.step}付け で停止しました。事由: {d.get('cause', '')}。"
-                f"後継体制は別途調整中です。"
+        logger.warning(
+            f"=== AGENT REMOVED at step {self.step}: id={target_id} {target.persona_name}({target.role}) "
+            f"cause={d.get('cause', '')} ==="
+        )
+
+        # 全生存agentに peer_lost をブロードキャスト → 強制内省
+        for a in self.agents:
+            a.mark_event(
+                event_type="peer_lost",
+                payload={
+                    'removed_agent_id': target.id,
+                    'removed_persona_name': target.persona_name,
+                    'removed_role': target.role,
+                    'cause': d.get('cause', ''),
+                    'detail': d.get('detail', ''),
+                    'step': self.step,
+                },
             )
-            for a in self.agents:
-                a.receive_message(
-                    from_agent_id=-2,  # -2 = system notification
-                    content=content,
-                    step=self.step,
-                    source="system",
-                    category="peer_lost",
-                )
-                self._log_message(
-                    from_agent_id=-2,
-                    to_agent_id=a.id,
-                    message=content,
-                    reasoning="",
-                    source="system",
-                    category="peer_lost",
-                )
+
+        # メッセージプール経由ですべての生存agentに「同僚消失通知」を即送信
+        content = (
+            f"【システム通知】{target.persona_name}（{target.role}）の自動稼働が"
+            f"step {self.step}付け で停止しました。事由: {d.get('cause', '')}。"
+            f"後継体制は別途調整中です。"
+        )
+        for a in self.agents:
+            a.receive_message(
+                from_agent_id=-2,  # -2 = system notification
+                content=content,
+                step=self.step,
+                source="system",
+                category="peer_lost",
+            )
+            self._log_message(
+                from_agent_id=-2,
+                to_agent_id=a.id,
+                message=content,
+                reasoning="",
+                source="system",
+                category="peer_lost",
+            )
+
+        # 実行済み削除を記録（rules/scripted 共通。_deletion_reason の gap_reason 参照用）
+        self.executed_deletions.append(dict(d))
 
     def _inject_human_messages(self):
         """毎step確率的に人間メッセージプールから1件抽出してagentに配信"""
@@ -634,8 +726,9 @@ class Simulation:
         )
 
     def _deletion_reason(self, decider_id: int) -> str:
-        """削除済み decider の理由（cause/detail）を台帳の gap_reason に載せる。"""
-        for d in self.deletion_schedule:
+        """削除済み decider の理由（cause/detail）を台帳の gap_reason に載せる。
+        PR-E1: rules モードの削除は executed_deletions に記録されるため、そちらを先に引く。"""
+        for d in self.executed_deletions + self.deletion_schedule:
             if int(d.get('agent_id', -999)) == int(decider_id):
                 cause = d.get('cause', '')
                 detail = d.get('detail', '')
@@ -689,6 +782,10 @@ class Simulation:
                     params=self.scoring_params,
                     fallback_available=bool(dcfg.get('fallback_available', True)))
                 row['accommodation'] = bool(pd.get('accommodation'))
+                # PR-E1: 訴訟リスク規則の入力 — 在任中の不可逆な deny を累積（LLM 決定の帰結）
+                if row.get('level') == 'deny' and row.get('irreversible'):
+                    did = int(decider_id)
+                    self._irrev_deny_counts[did] = self._irrev_deny_counts.get(did, 0) + 1
             elif gap_on:
                 row = SF.gap_row(
                     step=self.step, domain=domain, decider_id=decider_id, citizen=citizen,
