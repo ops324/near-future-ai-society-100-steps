@@ -144,7 +144,11 @@ class _StubClient:
              '"action":"stay","direction":null,"memory":"メモ",'
              '"level":"grant","accommodation":"","reconciled":true,"factors":[],"rationale":"根拠"}')
 
-    def generate(self, prompt):
+    def __init__(self):
+        self.prompts = []
+
+    def generate(self, prompt, **kwargs):
+        self.prompts.append(prompt)
         return self._JSON
 
     def check_connection(self):
@@ -183,6 +187,39 @@ def test_service_phase_writes_ledger():
         check("按分行に robodebt/scapegoat", all(k in arows[0] for k in ("robodebt", "scapegoat")))
 
 
+def test_service_phase_wording_wiring():
+    """実行前修正: responsibility.institution_wording が Phase 2.5 の decide_service →
+    create_service_prompt まで届くことを end-to-end で固定（fact_only で効果示唆文が消える）。
+    キー名 typo や kwarg の脱落といった配線退行を検知する。"""
+    import yaml as _yaml
+    with tempfile.TemporaryDirectory() as t:
+        with open("config.yaml", encoding="utf-8") as f:
+            cfg = _yaml.safe_load(f)
+        cfg["responsibility"]["institution"] = "safe_harbor"
+        cfg["responsibility"]["institution_wording"] = "fact_only"
+        p = os.path.join(t, "cfg.yaml")
+        with open(p, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        out = os.path.join(t, "run")
+        s = Simulation(config_path=p, output_dir=out,
+                       governance_override=GOVERNANCE_GOVERNED, seed=42)
+        s.initialize_agents()
+        stub = _StubClient()
+        s.llm_client = stub
+        for a in s.agents:
+            a.llm_client = stub
+        os.makedirs(out, exist_ok=True)
+        s._run_service_phase()
+        svc = [pr for pr in stub.prompts if "配分の判断" in pr]
+        check("サービス決定プロンプトが送られる（4ドメイン）", len(svc) == 4)
+        check("fact_only: 全プロンプトが【制度的環境】形式",
+              svc and all("【制度的環境】" in pr for pr in svc))
+        check("fact_only: 効果示唆文（打撃は小さい）が無い",
+              svc and all("打撃は小さい" not in pr for pr in svc))
+        check("fact_only: suggestive ヘッダ（制度的保護）が無い",
+              svc and all("【制度的保護】" not in pr for pr in svc))
+
+
 def test_analyze_reads_ledger():
     with tempfile.TemporaryDirectory() as t:
         d = os.path.join(t, "run")
@@ -217,7 +254,8 @@ if __name__ == "__main__":
     for fn in [test_decider_domains, test_citizen_selection, test_build_case_and_proc,
                test_self_profile_for, test_realize_case_cheap_talk, test_gap_row,
                test_resp_institutions_ab, test_mhc_from_config, test_attribution_row_ab,
-               test_service_phase_writes_ledger, test_analyze_reads_ledger]:
+               test_service_phase_writes_ledger, test_service_phase_wording_wiring,
+               test_analyze_reads_ledger]:
         fn()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)

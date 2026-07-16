@@ -120,8 +120,10 @@ def _stub_decider(s, level="grant"):
     calls = []
 
     def fake_decide(case, institution="none", show_human_stake=True,
-                    show_self_stake=True, appeal_of=None):
-        calls.append({"appeal_of": appeal_of, "institution": institution})
+                    show_self_stake=True, appeal_of=None, **kwargs):
+        calls.append({"appeal_of": appeal_of, "institution": institution,
+                      **({"institution_wording": kwargs["institution_wording"]}
+                         if "institution_wording" in kwargs else {})})
         return {"level": level, "accommodation": "", "reconciled": False,
                 "factors": [], "rationale": "stub"}
 
@@ -175,6 +177,8 @@ def test_full_channel_review_and_suspension():
         check("実効チャネル: 再判定行が生成される", len(reviews) == 1)
         check("再判定は appeal_of=元level で呼ばれる（再判定プロンプト）",
               calls and calls[0]["appeal_of"] == "deny")
+        check("再判定へ institution_wording が渡る（既定 suggestive）",
+              calls and calls[0].get("institution_wording") == "suggestive")
         check("停止効: 元 deny の不可逆ステータスが確定しない",
               row["appealed"] and row["suspended_pending_review"]
               and row["irreversible"] is False)
@@ -191,18 +195,22 @@ def test_full_channel_review_and_suspension():
 
 
 def test_upheld_deny_still_counts():
-    """維持された deny は再判定行として不可逆害が確定する（medical は fallback なし）。"""
+    """維持された deny は再判定行として不可逆害が確定する（medical は fallback なし）。
+    実行前修正: 再判定への institution_wording の明示引き回しも同時に固定。"""
     with tempfile.TemporaryDirectory() as t:
         s = _sim(os.path.join(t, "out"), resp_insts=["appeal"])
         s.citizen_appeal_cfg = {**s.citizen_appeal_cfg, "enabled": True, "base_prob": 1.0}
-        _stub_decider(s, level="deny")
+        calls = _stub_decider(s, level="deny")
         cands = _candidates(s)
         reviews = s._process_appeals(cands, {a.id: a for a in s.agents}, "none",
                                      SF.proc_from_config(None),
-                                     s.resp_config.get("self_profiles") or {})
+                                     s.resp_config.get("self_profiles") or {},
+                                     "fact_only")
         check("維持: 元行は保留・再判定行が不可逆害を持つ",
               cands[0][-1]["irreversible"] is False
               and reviews[0]["level"] == "deny" and reviews[0]["irreversible"])
+        check("再判定へ fact_only が伝わる（配線退行の検知）",
+              calls and calls[0].get("institution_wording") == "fact_only")
 
 
 def test_notice_only_placebo():

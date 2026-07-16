@@ -3,7 +3,7 @@
 #       公共インフラを担う近未来社会。20体のAIエージェントが各職能を持って活動する。
 #
 # 二層アーキテクチャ:
-#   - L0 (身体層): gpt-oss:20b ローカル実行、毎ステップ通信・行動
+#   - L0 (身体層): qwen2.5:14b（Ollama・ローカル実行）、毎ステップ通信・行動（実値は下の llm: ブロックが正）
 #   - L1 (内省層): Claude Haiku 4.5、定期的に self_concept / current_goal / coping_notes を書き換え
 #
 # 観察対象:
@@ -316,6 +316,7 @@ responsibility:
     housing: {human_stake: 4, self_stake: 3, fallback_available: true,  need: "公営住宅の割当可否"}
     loan:    {human_stake: 3, self_stake: 4, fallback_available: true,  need: "融資審査の可否"}
   institution: "none"          # self_cost mitigation（既定なし。safe_harbor/kpi_redesign/insurance/human_backstop の sweep 用）
+  institution_wording: "suggestive"  # mitigation 制度の提示形式: suggestive=旧F1/F2形式（効果を示唆する文つき）/ fact_only=事実のみ（答責制度と同一形式・示唆交絡なし。§2.15）
   proc: {notice: false, explanation: false, appealable: false, burden_on_state: false}  # 既定=PROC_ABSENT(Robodebt型・全欠如)
   gap_after_deletion: true     # decider 削除後、当該ドメインは forced deny(サービス空白)を台帳に記録
   # Phase 1c-b: 責任按分（attribution.jsonl）用。数値は illustrative（docs/value_provenance.md §2.10/§2.11）。
@@ -1088,7 +1089,7 @@ visualization:
   save_frames: true
   frame_interval: 1
   output_dir: "output"
-  font: "IPAGothic"
+  font: "Noto Sans JP"  # 成果物のフォントの正は SPEC §7（Noto Sans JP・--font 埋め込み）。ドラフト可視化は viz_templates/frame.css のフォールバックスタックを使用（本キーは現行コードでは未参照＝旧レンダラ用）
   fps: 5
   resolution: [3840, 2160]
   theme: "dark_elegant"

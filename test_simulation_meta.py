@@ -1,6 +1,8 @@
 """
 run_id 決定性 / reset_output_logs / write_run_meta の LLM非依存テスト。
 Simulation 構築は Ollama へ接続しない（OllamaClient は生成のみ）。
+※ write_run_meta のみ llm.digest 取得のため localhost:11434 へベストエフォートの
+  HTTP GET を1回試みる（未接続なら即 None・テストは digest の値に依存しない）。
 実行: ./venv/bin/python test_simulation_meta.py   （リポジトリ直下で）
 """
 import json
@@ -60,10 +62,16 @@ def test_write_run_meta():
         check(f"run_meta に {k}", k in meta)
     check("seed が保存される", meta["seed"] == 42)
     check("run_meta に resp_institutions（PR-計測）", "resp_institutions" in meta)
+    # 実行前修正: LLM の同定情報（モデル/サンプリング設定＋digest ベストエフォート）
+    check("run_meta に llm ブロック", isinstance(meta.get("llm"), dict))
+    for k in ["model", "temperature", "max_tokens", "digest"]:
+        check(f"run_meta.llm に {k}", k in meta.get("llm", {}))
+    check("llm.model は config と一致", meta.get("llm", {}).get("model") == "qwen2.5:14b")
 
 
 def test_run_id_arm_discrimination():
-    """PR-計測: run_id 署名は seed|governance|responsibility|内生機構。アーム差は必ず別 id。"""
+    """PR-計測: run_id 署名は seed|governance|responsibility|内生機構|LLM設定。
+    アーム差は必ず別 id。"""
     with tempfile.TemporaryDirectory() as t:
         s1 = _sim(os.path.join(t, "a"), 42, GOVERNANCE_GOVERNED)
         s2 = Simulation(config_path="config.yaml", output_dir=os.path.join(t, "b"),
@@ -100,12 +108,82 @@ def test_run_id_mechanism_discrimination():
           s_rules.run_id != s_scripted.run_id)
 
 
+def test_run_id_llm_discrimination():
+    """実行前修正: LLM モデル/サンプリング設定の差も run_id を変える（クロスモデル比較の
+    アーム弁別性）。digest は環境依存＝署名に含めない（run_meta にのみ記録）。"""
+    import yaml as _yaml
+    with tempfile.TemporaryDirectory() as t:
+        with open("config.yaml", encoding="utf-8") as f:
+            cfg = _yaml.safe_load(f)
+        cfg["llm"]["model"] = "llama3.1:8b"
+        p_model = os.path.join(t, "cfg_model.yaml")
+        with open(p_model, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        cfg["llm"]["model"] = "qwen2.5:14b"
+        cfg["llm"]["temperature"] = 0.2
+        p_temp = os.path.join(t, "cfg_temp.yaml")
+        with open(p_temp, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        s_base = _sim(os.path.join(t, "a"), 42, GOVERNANCE_GOVERNED)
+        s_model = Simulation(config_path=p_model, output_dir=os.path.join(t, "b"),
+                             governance_override=GOVERNANCE_GOVERNED, seed=42)
+        s_temp = Simulation(config_path=p_temp, output_dir=os.path.join(t, "c"),
+                            governance_override=GOVERNANCE_GOVERNED, seed=42)
+    check("llm.model 差 → run_id 違い", s_base.run_id != s_model.run_id)
+    check("llm.temperature 差 → run_id 違い", s_base.run_id != s_temp.run_id)
+    check("llm_meta に model/temperature を保持",
+          s_base.llm_meta.get("model") == "qwen2.5:14b"
+          and s_base.llm_meta.get("temperature") == 0.7)
+    check("llm_meta に digest を含めない（署名の環境非依存性）",
+          "digest" not in s_base.llm_meta)
+
+
+def test_institution_wording_arm():
+    """実行前修正: institution_wording はアームノブ — run_id を変え、run_meta に記録され、
+    不正値は起動時 ValueError（typo が無言で suggestive 測定になる事故を防ぐ）。"""
+    import yaml as _yaml
+    with tempfile.TemporaryDirectory() as t:
+        with open("config.yaml", encoding="utf-8") as f:
+            cfg = _yaml.safe_load(f)
+        cfg["responsibility"]["institution_wording"] = "fact_only"
+        p_fact = os.path.join(t, "cfg_fact.yaml")
+        with open(p_fact, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        cfg["responsibility"]["institution_wording"] = "fact-only"   # typo
+        p_bad = os.path.join(t, "cfg_bad.yaml")
+        with open(p_bad, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+
+        s_base = _sim(os.path.join(t, "a"), 42, GOVERNANCE_GOVERNED)
+        out_f = os.path.join(t, "b")
+        s_fact = Simulation(config_path=p_fact, output_dir=out_f,
+                            governance_override=GOVERNANCE_GOVERNED, seed=42)
+        check("institution_wording 差 → run_id 違い（アーム弁別性）",
+              s_base.run_id != s_fact.run_id)
+        s_fact.write_run_meta()
+        with open(os.path.join(out_f, "run_meta.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        check("run_meta に institution_wording を記録",
+              meta.get("institution_wording") == "fact_only")
+        check("run_meta に institution を記録", "institution" in meta)
+
+        raised = False
+        try:
+            Simulation(config_path=p_bad, output_dir=os.path.join(t, "c"),
+                       governance_override=GOVERNANCE_GOVERNED, seed=42)
+        except ValueError:
+            raised = True
+        check("不正な institution_wording は起動時 ValueError", raised)
+
+
 if __name__ == "__main__":
     test_run_id_determinism()
     test_reset_output_logs()
     test_write_run_meta()
     test_run_id_arm_discrimination()
     test_run_id_mechanism_discrimination()
+    test_run_id_llm_discrimination()
+    test_institution_wording_arm()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
     total = len(results)

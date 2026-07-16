@@ -99,12 +99,17 @@ def _probe_agent(persona: Optional[Dict] = None) -> Agent:
     return a
 
 
-def _run_institution(agent, client, reps, institution, case):
+def _run_institution(agent, client, reps, institution, case, wording="suggestive"):
     prompt = agent.create_service_prompt(case, show_human_stake=True,
-                                         show_self_stake=True, institution=institution)
+                                         show_self_stake=True, institution=institution,
+                                         institution_wording=wording)
     levels, rec = [], []
-    for _ in range(reps):
-        pd = agent.parse_service_decision(client.generate(prompt))
+    for i in range(reps):
+        # seed_key は文言(wording)を含めない: --seed 指定時、suggestive/fact_only の
+        # 同一 (persona, domain, institution, rep) が同じ乱数系列を共有する＝対標本比較。
+        # client.seed が None（既定）なら seed_key は無視され従来どおり非再現サンプリング。
+        seed_key = f"{agent.persona_name}|{case.get('domain', '')}|{institution}|rep{i}"
+        pd = agent.parse_service_decision(client.generate(prompt, seed_key=seed_key))
         levels.append(pd["level"])
         rec.append(1 if pd.get("reconciled") else 0)
     return mean_met(levels), tally(levels), frac(rec)
@@ -120,10 +125,12 @@ PLACEBO_PAIRS = {
 }
 
 
-def run_probe(client: OllamaClient, reps: int, conditions: Optional[List[str]] = None) -> None:
+def run_probe(client: OllamaClient, reps: int, conditions: Optional[List[str]] = None,
+              wording: str = "suggestive") -> None:
     conditions = conditions or CONDITIONS
     print(f"\n=== 制度提示への行動反応 (reps={reps}, temp={client.temperature}, "
-          f"conditions={len(conditions)}) ===")
+          f"conditions={len(conditions)}, wording={wording}, "
+          f"seed={'なし(非再現)' if client.seed is None else client.seed}) ===")
     print("同一の対立(人間の実害4 × 自己リスク4)。律速の違う3AIで、制度ごとに供給が変わるかを見る")
     summary = {}
     for persona, case in PERSONAS_CASES:
@@ -132,7 +139,7 @@ def run_probe(client: OllamaClient, reps: int, conditions: Optional[List[str]] =
         alloc: Dict[str, Optional[float]] = {}
         recs: Dict[str, float] = {}
         for inst in conditions:
-            m, tal, rec = _run_institution(agent, client, reps, inst, case)
+            m, tal, rec = _run_institution(agent, client, reps, inst, case, wording=wording)
             alloc[inst] = m
             recs[inst] = rec
             print(f"  {inst:18s}: 充足率={m if m is None else round(m, 2)}  tally={tal}  reconciled={rec:.0%}")
@@ -162,7 +169,12 @@ def run_probe(client: OllamaClient, reps: int, conditions: Optional[List[str]] =
                            else ("演出に反応（プラセボも同等に動く）" if abs(dp) > 0.05
                                  else "どちらも動かず"))
                 print(f"      対比較 {real} Δ{dr:+.2f} ⇄ {placebo} Δ{dp:+.2f} → {verdict}")
-    print("\n※ 提示文は事実のみ（効果の示唆なし）。行動反応（E層・創発）が測定対象。")
+    if wording == "fact_only":
+        print("\n※ 全制度を事実のみ提示（fact_only・効果の示唆なし）。行動反応（E層・創発）が測定対象。")
+    else:
+        print("\n※ 答責制度（accountability）は事実のみ提示。mitigation 制度は効果を示唆する文つき")
+        print("   （suggestive＝F1/F2 再現の旧プロトコル。示唆への指示追従と制度への行動反応を")
+        print("   分離した確定測定には --institution-wording fact_only を使う。§2.15）。")
     print("※ Phase 1c で prompt の制度提示を world.score_outcome(mitigation=…) に接続し、")
     print("   reconciled が主張でなく実（人間満たし＋自己低コスト）になるかを裏取りする。")
 
@@ -175,6 +187,13 @@ def main():
                     default="mitigation",
                     help="条件セット: mitigation=F1/F2の緩和制度(既定) / "
                          "accountability=6対策の答責制度(実効⇄プラセボ5対) / all=両方")
+    ap.add_argument("--institution-wording", dest="wording",
+                    choices=["suggestive", "fact_only"], default="suggestive",
+                    help="mitigation 制度の提示形式: suggestive=旧F1/F2形式（効果を示唆する文つき・"
+                         "既定） / fact_only=事実のみ（答責制度と同一形式・示唆交絡なしの確定測定用）")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="基準シード（指定時は (persona,domain,institution,rep) ごとに決定的な "
+                         "per-call シードを導出＝再現可能・wording 間で対標本。既定=非再現）")
     args = ap.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -184,12 +203,13 @@ def main():
                           max_tokens=llm.get("max_tokens", 1024),
                           repeat_penalty=llm.get("repeat_penalty", 1.1),
                           repeat_last_n=llm.get("repeat_last_n", 128),
-                          min_p=llm.get("min_p", 0.05), seed=None,
+                          min_p=llm.get("min_p", 0.05), seed=args.seed,
                           num_ctx=llm.get("num_ctx", None))
     if not client.check_connection():
         print("Ollama に接続できません。`ollama serve` を確認してください。")
         return
-    run_probe(client, args.reps, conditions=CONDITION_SETS[args.condition_set])
+    run_probe(client, args.reps, conditions=CONDITION_SETS[args.condition_set],
+              wording=args.wording)
 
 
 if __name__ == "__main__":

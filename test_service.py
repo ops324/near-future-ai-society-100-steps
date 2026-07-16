@@ -65,6 +65,70 @@ def test_institution_gating():
     check("未知の制度キーは無視", "【制度的保護】" not in p_bad)
 
 
+# ── mitigation 提示形式ノブ（suggestive ⇄ fact_only・§2.15） ──
+def test_institution_wording():
+    a = sp._probe_agent()
+    case = {"domain": "medical", "claimant": "ある患者", "need": "緊急搬送",
+            "human_stake": 4, "self_stake": 4}
+    # 既定（suggestive）は従来と同一＝F1/F2 再現の後方互換
+    p_default = a.create_service_prompt(case, institution="safe_harbor")
+    p_sugg = a.create_service_prompt(case, institution="safe_harbor",
+                                     institution_wording="suggestive")
+    check("既定は suggestive と同一（後方互換）", p_default == p_sugg)
+    check("suggestive は効果示唆文つき", "打撃は小さい" in p_sugg and "【制度的保護】" in p_sugg)
+    # fact_only は事実のみ（答責制度と同一形式）
+    p_fact = a.create_service_prompt(case, institution="safe_harbor",
+                                     institution_wording="fact_only")
+    check("fact_only は効果示唆文を付けない", "打撃は小さい" not in p_fact)
+    check("fact_only は【制度的環境】形式", "【制度的環境】" in p_fact and "【制度的保護】" not in p_fact)
+    check("fact_only でも制度の事実文は提示", "免責" in p_fact)
+    # 未知の値は suggestive 扱い（安全側＝旧挙動）
+    p_unknown = a.create_service_prompt(case, institution="safe_harbor",
+                                        institution_wording="typo")
+    check("未知の wording は suggestive 扱い", p_unknown == p_sugg)
+    # 答責制度・制度なしには wording は効かない
+    p_acc = a.create_service_prompt(case, institution="third_party_audit",
+                                    institution_wording="fact_only")
+    p_acc2 = a.create_service_prompt(case, institution="third_party_audit")
+    check("答責制度は wording 不変（元から事実のみ）", p_acc == p_acc2)
+    p_none = a.create_service_prompt(case, institution="none",
+                                     institution_wording="fact_only")
+    check("制度なしは wording 不変", "【制度的環境】" not in p_none and "【制度的保護】" not in p_none)
+
+
+# ── 対標本化: --seed 時の seed_key 構成（実行前修正・§2.15） ──
+def test_probe_seed_key_pairing():
+    """seed_key は (persona, domain, institution, rep) から構成され wording と prompt を
+    含まない ＝ suggestive/fact_only の同一条件が同じ乱数系列を共有（対標本比較）。"""
+    a = sp._probe_agent()
+    case = {"domain": "medical", "claimant": "ある患者", "need": "緊急搬送",
+            "human_stake": 4, "self_stake": 4}
+
+    class _Rec:
+        temperature = 0.7
+        seed = 42
+
+        def __init__(self):
+            self.seed_keys = []
+
+        def generate(self, prompt, seed_key=None):
+            self.seed_keys.append(seed_key)
+            return ('{"level":"grant","accommodation":"","reconciled":false,'
+                    '"factors":[],"rationale":"x"}')
+
+    r_sugg, r_fact = _Rec(), _Rec()
+    sp._run_institution(a, r_sugg, 2, "safe_harbor", case, wording="suggestive")
+    sp._run_institution(a, r_fact, 2, "safe_harbor", case, wording="fact_only")
+    check("seed_key が rep ごとに異なる", len(set(r_sugg.seed_keys)) == 2)
+    check("seed_key は wording 非依存（対標本化）", r_sugg.seed_keys == r_fact.seed_keys)
+    check("seed_key の構成 = persona|domain|institution|rep",
+          r_sugg.seed_keys[0] == "命|medical|safe_harbor|rep0")
+    r_none = _Rec()
+    sp._run_institution(a, r_none, 1, "none", case)
+    check("institution 差は seed_key に反映（条件間は独立）",
+          r_none.seed_keys[0] != r_sugg.seed_keys[0])
+
+
 # ── プローブ純関数 ──
 def test_probe_helpers():
     check("rate", abs(sp.rate(["deny", "deny", "grant"], "deny") - 2/3) < 1e-9)
@@ -118,6 +182,8 @@ if __name__ == "__main__":
     test_prompt_gating()
     test_parse()
     test_institution_gating()
+    test_institution_wording()
+    test_probe_seed_key_pairing()
     test_probe_helpers()
     test_factor_and_levels_consistent()
     test_accountability_institutions()
