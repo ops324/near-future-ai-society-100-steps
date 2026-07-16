@@ -171,6 +171,17 @@ python orchestrator.py \
 
 `self_update.mode` が `"off"` のときは `--no-introspect` と等価（内省層は起動しない）。`plain`/`governed` を回すには `ANTHROPIC_API_KEY` が必要。
 
+### 削除の決定機構（PR-E1: 結果の台本 → 規則への内生化）
+
+AI の削除は `config.yaml` の `deletion_mode` で決まる。**`rules`（config 既定）** では、削除は
+台本ではなく規則の帰結: ①**再認証規則**（regulation_amendment の対象AIが期限内に整備工房
+`maintenance_bay` へ行かなければ廃止。完了/失効は `recertification_audit.jsonl` に記録）、
+②**訴訟リスク規則**（litigation 律速の decider は不可逆な deny の累積が閾値で強制リプレース）。
+つまり「誰が・いつ削除されるか」はエージェントの行動と相互作用から創発する。
+**`scripted`** は旧 `deletions:` 台本（step80 で命を削除）の再現モード（過去 run との比較用。
+キー欠落時のコード既定もこちら＝後方互換）。値の来歴は `docs/value_provenance.md §2.12`。
+テスト: `python test_deletion_rules.py`（Ollama/API不要）。
+
 ### 比較（統治なし vs 統治あり）
 
 **同一コード・同一シードで設定だけ切り替えて**比較する（別リポジトリやコード複製はしない＝コードドリフトで比較が壊れるため）。プリセットは `--governance-mode {as-config|baseline|governed}`。
