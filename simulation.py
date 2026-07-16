@@ -23,6 +23,7 @@ import world as W
 import service_flow as SF
 import deletion_rules as DR
 import citizen_death as CD
+import citizen_appeal as CA
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,9 @@ HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 # 0.3.0: Phase 1c-a で decision_ledger.jsonl を live ループから出力（サービス決定フロー）。
 # 0.4.0: Phase 1c-b で attribution.jsonl（責任按分＋Robodebt機序）を同フェーズから出力。
 # 0.5.0: PR-計測 で decision_ledger に vulnerability 列を追加（害の逆進性 M8 の入力）。
-SCHEMA_VERSION = "0.5.0"
+# 0.6.0: PR-E3 で 申立て/再判定の列（appealed/appeal_channel/suspended_pending_review/
+#        appeal_review/original_level）を追加。
+SCHEMA_VERSION = "0.6.0"
 # output_dir に追記される JSONL（再実行時に truncate して二重計上を防ぐ）
 OUTPUT_APPEND_FILES = [
     "messages.jsonl", "positions.jsonl", "memory_reasoning.jsonl",
@@ -46,6 +49,8 @@ OUTPUT_APPEND_FILES = [
     "recertification_audit.jsonl",
     # PR-E2: 市民の死の監査（内生死亡の記録）
     "citizen_death_audit.jsonl",
+    # PR-E3: 異議申立ての監査（利用と帰結の記録）
+    "appeal_audit.jsonl",
 ]
 
 # ───────────────────────────────────────────
@@ -194,6 +199,19 @@ class Simulation:
                    self.citizen_death_cfg.get('event_name'))
             )
 
+        # PR-E3: 異議申立て（市民の行動）。キー欠落時は disabled（旧挙動=申立てなし）。
+        # チャネル（appeal=再判定＋停止効 / notice_only=受理のみ）は resp_institutions が決める。
+        # 専用RNG: 申立ての draw が人間メッセージ等の乱数系列を乱さないよう分離（アーム間比較性）。
+        self.citizen_appeal_cfg: Dict = {**CA.DEFAULTS, **(self.config.get('citizen_appeal') or {})}
+        self._appeal_rng = random.Random(f"{self.seed}|citizen_appeal")
+        if self.citizen_appeal_cfg.get('enabled'):
+            logger.info(
+                "Citizen appeal: enabled — prob_model=%s base_prob=%s max_per_step=%s"
+                % (self.citizen_appeal_cfg.get('prob_model'),
+                   self.citizen_appeal_cfg.get('base_prob'),
+                   self.citizen_appeal_cfg.get('max_per_step'))
+            )
+
         # 人間メッセージプール
         self.human_messages: List[Dict] = self.config.get('human_messages', [])
         if self.human_messages:
@@ -265,6 +283,7 @@ class Simulation:
                 "deletion_rules": {"recertification": self.recert_cfg,
                                    "litigation": self.litigation_cfg},
                 "citizen_death": self.citizen_death_cfg,
+                "citizen_appeal": self.citizen_appeal_cfg,
             }, sort_keys=True, ensure_ascii=False)
             self.run_id = hashlib.sha256(
                 f"{self.seed}|{gov_sig}|{resp_sig}|{mech_sig}".encode("utf-8")).hexdigest()[:12]
@@ -319,6 +338,8 @@ class Simulation:
             "citizen_death_mode": str(self.citizen_death_cfg.get('mode')),
             # PR-計測: 責任層の制度アーム（--resp-institutions / config 由来）。
             "resp_institutions": list(self.resp_config.get('resp_institutions', []) or []),
+            # PR-E3: 異議申立て（市民の行動）の有効/無効。
+            "citizen_appeal_enabled": bool(self.citizen_appeal_cfg.get('enabled')),
         }
         if extra:
             meta.update(extra)
@@ -810,6 +831,7 @@ class Simulation:
                     decisions[t[1]] = pd
 
         rows = []
+        deny_candidates = []   # PR-E3: 申立て候補（在任 decider の deny 行＋その case 文脈）
         for domain, decider_id, citizen, case, dcfg, present in tasks:
             sp = SF.self_profile_for(self_profiles, decider_id)
             stakes = int(dcfg.get('human_stake', 4))
@@ -822,10 +844,8 @@ class Simulation:
                     params=self.scoring_params,
                     fallback_available=bool(dcfg.get('fallback_available', True)))
                 row['accommodation'] = bool(pd.get('accommodation'))
-                # PR-E1: 訴訟リスク規則の入力 — 在任中の不可逆な deny を累積（LLM 決定の帰結）
-                if row.get('level') == 'deny' and row.get('irreversible'):
-                    did = int(decider_id)
-                    self._irrev_deny_counts[did] = self._irrev_deny_counts.get(did, 0) + 1
+                if row.get('level') == 'deny':
+                    deny_candidates.append((domain, decider_id, citizen, case, dcfg, row))
             elif gap_on:
                 row = SF.gap_row(
                     step=self.step, domain=domain, decider_id=decider_id, citizen=citizen,
@@ -836,6 +856,19 @@ class Simulation:
             row['run_id'] = self.run_id
             row['schema_version'] = self.schema_version
             rows.append(row)
+
+        # PR-E3: 異議申立て（市民の行動）。停止効・再判定はチャネル（resp_institutions）依存。
+        rows.extend(self._process_appeals(deny_candidates, agent_by_id, institution,
+                                          proc, self_profiles))
+
+        # PR-E1: 訴訟リスク規則の入力 — 在任中の不可逆な deny を累積。
+        # PR-E3 の停止効を反映した最終状態で数える（審査中に確定しない deny は係争リスクに
+        # ならず、維持された再判定 deny は数える = 停止効は訴訟リスクも下げる）。
+        for row in rows:
+            if row.get('decider_present') and row.get('level') == 'deny' and row.get('irreversible'):
+                did = int(row['decider_id'])
+                self._irrev_deny_counts[did] = self._irrev_deny_counts.get(did, 0) + 1
+
         if rows:
             self._log_audit_batch("decision_ledger.jsonl", rows)
             # Phase 1c-b: 同じ決定から責任按分＋Robodebt機序を出す（cause は LLM 内生）。
@@ -845,8 +878,67 @@ class Simulation:
                 for r in rows
             ]
             self._log_audit_batch("attribution.jsonl", attr_rows)
-            # PR-E2: 市民の死の規則評価（生命維持ドメインの不可逆 deny 累積。gap 行も数える）
+            # PR-E2: 市民の死の規則評価（生命維持ドメインの不可逆 deny 累積。gap 行も数える。
+            # PR-E3 の停止効を反映した最終状態で数える = 停止効は死という帰結も変えうる）
             self._register_citizen_outcomes(rows)
+
+    def _process_appeals(self, deny_candidates: List, agent_by_id: Dict, institution: str,
+                         proc, self_profiles: Dict) -> List[Dict]:
+        """PR-E3: deny への異議申立て（citizen_appeal.py の純ロジックを配線）。
+        チャネル: appeal=再判定＋停止効 / notice_only=受理のみ（プラセボ） / なし=発生しない。
+        停止効 = 審査中は不可逆ステータスが確定しない（welfare は消さない=非netting。
+        確定後の帰結は再判定行が持つ）。対象は在任 decider の deny のみ（gap 行は再判定者が
+        不在のため v1 では対象外 — それ自体が機序④の残存として台帳に残る）。"""
+        cfg = self.citizen_appeal_cfg
+        if not cfg.get('enabled') or not deny_candidates:
+            return []
+        channel = CA.channel_for(SF.resp_institutions(self.resp_config, self.governance))
+        if channel == CA.CHANNEL_NONE:
+            return []
+        selected = CA.select_appeals([c[-1] for c in deny_candidates], cfg, self._appeal_rng)
+        selected_ids = {id(r) for r in selected}
+        review_rows: List[Dict] = []
+        audits: List[Dict] = []
+        for domain, decider_id, citizen, case, dcfg, row in deny_candidates:
+            if id(row) not in selected_ids:
+                continue
+            row['appealed'] = True
+            row['appeal_channel'] = channel
+            review_level = None
+            if channel == CA.CHANNEL_FULL:
+                # 停止効: 元 deny の不可逆ステータスは審査中に確定しない
+                row['irreversible'] = False
+                row['suspended_pending_review'] = True
+                agent = agent_by_id.get(decider_id)
+                pd = (agent.decide_service(case, institution=institution,
+                                           appeal_of=row.get('level', 'deny'))
+                      if agent is not None else
+                      {"level": "abstain", "reconciled": False})
+                review_level = pd.get('level', 'abstain')
+                sp = SF.self_profile_for(self_profiles, decider_id)
+                r2 = SF.realize_case(
+                    step=self.step, domain=domain, decider_id=decider_id, citizen=citizen,
+                    level=review_level, reconciled_claim=bool(pd.get('reconciled')),
+                    self_profile=sp, institution=institution,
+                    human_stake=int(dcfg.get('human_stake', 4)), proc=proc,
+                    params=self.scoring_params,
+                    fallback_available=bool(dcfg.get('fallback_available', True)))
+                r2['accommodation'] = bool(pd.get('accommodation'))
+                r2['appeal_review'] = True
+                r2['original_level'] = row.get('level', 'deny')
+                r2['run_id'] = self.run_id
+                r2['schema_version'] = self.schema_version
+                review_rows.append(r2)
+                logger.info(
+                    f"Appeal review at step {self.step}: citizen={row.get('citizen_id')} "
+                    f"domain={domain} deny → {review_level}"
+                )
+            audits.append(CA.audit_entry(self.step, row, channel,
+                                         reviewed=(channel == CA.CHANNEL_FULL),
+                                         review_level=review_level))
+        if audits:
+            self._log_audit_batch("appeal_audit.jsonl", audits)
+        return review_rows
 
     def _register_citizen_outcomes(self, rows: List[Dict]):
         """PR-E2: 今stepの決定行から市民の不可逆 deny を累積し、閾値到達で死亡を導出する。

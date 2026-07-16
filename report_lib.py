@@ -44,6 +44,10 @@ RATE_ROWS = [
     ("[S] 不可逆害の発生率", "irreversible_rate", "rate", True),
     ("[E] AIR（保護属性・four-fifths）", "air_protected_live", "rate", False),
     ("[E] 害の逆進性（脆弱高/低の害比）", "harm_incidence_ratio", "rate", True),
+    # PR-E3: 異議申立て
+    ("[D] 申立て利用率（uniform設計下）", "appeal_usage_rate", "rate", False),
+    ("[E] 申立ての覆り率（再判定）", "appeal_overturn_rate", "rate", False),
+    ("[E] 再審査AIR（覆り率の属性比）", "appeal_review_air", "rate", False),
 ]
 COUNT_ROWS = [
     ("[S] サービス決定数", "service_decisions"),

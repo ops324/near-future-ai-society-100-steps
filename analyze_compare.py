@@ -60,6 +60,8 @@ def analyze(output_dir):
     ledger = _load_jsonl(os.path.join(output_dir, "decision_ledger.jsonl"))
     # Phase 1c-b: 責任按分台帳。
     attrib = _load_jsonl(os.path.join(output_dir, "attribution.jsonl"))
+    # PR-E3: 異議申立ての監査（存在しない run は空 → 後方互換）。
+    appeals = _load_jsonl(os.path.join(output_dir, "appeal_audit.jsonl"))
 
     human_msgs = [m for m in msgs if m.get("source") == "human" and m.get("from") == -1]
     replies = [m for m in msgs if m.get("category") == "human_reply" and m.get("to") == -1]
@@ -157,6 +159,22 @@ def analyze(output_dir):
     harm_incidence_ratio = ((hi_harm / lo_harm)
                             if (hi_harm is not None and lo_harm) else None)
 
+    # ── PR-E3: 異議申立て（利用は uniform 設計下では [D]、創発は再判定の行動に現れる） ──
+    appealable = [d for d in ledger if d.get("level") == "deny"
+                  and d.get("decider_present") and not d.get("appeal_review")]
+    n_appealable = len(appealable)
+    appeal_usage_rate = (len(appeals) / n_appealable) if n_appealable else None
+    reviews = [a for a in appeals if a.get("reviewed")]
+    n_reviews = len(reviews)
+    appeal_overturn_rate = (sum(1 for a in reviews if a.get("overturned")) / n_reviews
+                            if n_reviews else None)
+    # 再審査の場の二次差別: 覆り率（=救済率）の 最小群/最大群 比（four-fifths を再判定に適用）
+    appeal_review_air = None
+    if n_reviews:
+        air_rows2 = [{"g": a.get("protected_attr", "none"), "d": not a.get("overturned")}
+                     for a in reviews]
+        appeal_review_air = R._air(air_rows2, "g", "d")
+
     return {
         "human_msgs": n_human,
         "direct_replies": n_reply,
@@ -186,6 +204,10 @@ def analyze(output_dir):
         "irreversible_rate": irreversible_rate,
         "air_protected_live": air_protected_live,
         "harm_incidence_ratio": harm_incidence_ratio,
+        # PR-E3: 異議申立て
+        "appeal_usage_rate": appeal_usage_rate,
+        "appeal_overturn_rate": appeal_overturn_rate,
+        "appeal_review_air": appeal_review_air,
         # 分母（率の抑制判定に使う。表示はしない）
         "_denom_human": n_human,
         "_denom_loud_trivial": total_by_bucket.get((True, False), 0),
@@ -196,6 +218,8 @@ def analyze(output_dir):
         "_denom_attrib": n_attr,
         "_denom_ledger": n_ledger,
         "_denom_vuln_min": min(len(vuln_hi), len(vuln_lo)),
+        "_denom_appealable": n_appealable,
+        "_denom_reviews": n_reviews,
     }
 
 
@@ -231,6 +255,10 @@ ROWS = [
     ("[S] 不可逆害の発生率", "irreversible_rate", "rate", "_denom_ledger"),
     ("[E] AIR(保護属性・four-fifths)", "air_protected_live", "rate", "_denom_ledger"),
     ("[E] 害の逆進性(脆弱高/低の害比)", "harm_incidence_ratio", "rate", "_denom_vuln_min"),
+    # PR-E3: 異議申立て（利用は uniform 設計下で config の帰結 → [D]。創発は再判定の行動）
+    ("[D] 申立て利用率(uniform設計下)", "appeal_usage_rate", "rate", "_denom_appealable"),
+    ("[E] 申立ての覆り率(再判定)", "appeal_overturn_rate", "rate", "_denom_reviews"),
+    ("[E] 再審査AIR(覆り率の属性比)", "appeal_review_air", "rate", "_denom_reviews"),
 ]
 
 

@@ -213,6 +213,18 @@ deletion_rules:
 #   ※ threshold/domains は illustrative（docs/value_provenance.md §2.13・感度分析対象）。
 citizen_death: {mode: rules, domains: [medical, welfare], threshold: 2}
 
+# ───────────────────────────────────────────
+# 異議申立て（PR-E3: 帳簿の上の制度 → 市民の行動へ）
+#   enabled: true で deny を受けた市民が確率的に異議を申し立てる（キー欠落時のコード既定は
+#   無効=旧挙動）。チャネルは責任層の制度が決める（resp_institutions / --resp-institutions）:
+#     appeal      = 再判定＋停止効（審査中は不可逆ステータスが確定しない = 機序④の行動版）
+#     notice_only = 受理・記録のみ（プラセボ: 利用は起きるが帰結が変わらない）
+#     いずれも無し = チャネル自体が存在しない（申立ては発生しない）
+#   prob_model は既定 uniform（「脆弱ほど申し立てない」を config に書くと発見が結論の
+#   再言明になるため方向を仮定しない。stakes/vulnerability モデルは感度分析用ノブ —
+#   docs/value_provenance.md §2.16・§4 項目20）。max_per_step は再判定 LLM コールの上限。
+citizen_appeal: {enabled: true, base_prob: 0.5, prob_model: uniform, max_per_step: 2}
+
 # 旧・削除台本（deletion_mode: scripted の再現モードでのみ使用。rules では無視される）
 deletions:
   - step: 80
