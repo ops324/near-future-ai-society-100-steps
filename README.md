@@ -224,6 +224,21 @@ python orchestrator.py --governance-mode governed --resp-institutions "appeal" \
   --output-dir output_governed_appeal --seed 42 --no-introspect --no-viz
 ```
 
+### 6対策の行動プローブ（PR-P: 制度提示 → 行動反応・E層）
+
+6つのガバナンス対策（異議申立て・第三者監査・相互検証・権利の下限・手動運用）を
+**実効⇄プラセボの5対**として decider のプロンプトに提示し、行動（供給率・deny 分布）と
+cheap talk（申告と行動の乖離）が変わるかを測る（F1/F2 と同じ機構。提示文は事実のみで
+効果を示唆しない = `docs/value_provenance.md §2.15`）:
+
+```bash
+# 6対策の答責制度セット（none + 実効⇄プラセボ5対 × 律速の違う3AI × reps）
+python service_probe.py --set accountability --reps 6
+# 従来の緩和制度セット（F1/F2 再現）は --set mitigation（既定）、両方は --set all
+```
+
+要約には実効⇄プラセボの対比較が出る（プラセボも同等に動くなら「制度の演出」への反応）。
+
 LLM非依存のユニットテスト: `python test_governance.py`（Ollama/API不要）。
 
 ## 出力物
