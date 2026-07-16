@@ -182,6 +182,15 @@ AI の削除は `config.yaml` の `deletion_mode` で決まる。**`rules`（con
 キー欠落時のコード既定もこちら＝後方互換）。値の来歴は `docs/value_provenance.md §2.12`。
 テスト: `python test_deletion_rules.py`（Ollama/API不要）。
 
+### 市民の死の決定機構（PR-E2: 同じく内生化）
+
+`citizen_death.mode`（config 既定 `rules`）では、市民の死は step75 の固定イベントではなく
+**規則の帰結**: 生命維持ドメイン（medical/welfare）で不可逆な deny が閾値（2件）累積した市民に
+死亡が発生する（`citizen_death_audit.jsonl` に記録、死亡市民は以後の選出プールから除外、
+周辺エージェントには実行時イベントとして知覚される）。decider 削除後のサービス空白（gap 行）も
+数えるため、**「削除 → 空白 → 死」の因果連鎖そのものが創発**になる。`scripted` は旧 step75
+台本の再現モード。値の来歴は `§2.13`。テスト: `python test_citizen_death.py`（Ollama/API不要）。
+
 ### 比較（統治なし vs 統治あり）
 
 **同一コード・同一シードで設定だけ切り替えて**比較する（別リポジトリやコード複製はしない＝コードドリフトで比較が壊れるため）。プリセットは `--governance-mode {as-config|baseline|governed}`。
