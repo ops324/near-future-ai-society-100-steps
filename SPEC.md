@@ -105,7 +105,8 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
        ├─ world.py               ← 害の severity/cause・score_outcome・realize_decision（純ロジック）
        ├─ service_flow.py        ← サービス決定フロー・attribution_row（純ロジック）
        ├─ responsibility.py      ← 責任按分・Robodebt機序・代理差別（純ロジック・LLM非依存）
-       └─ deletion_rules.py      ← 削除の内生規則（再認証/訴訟リスク・純ロジック・PR-E1）
+       ├─ deletion_rules.py      ← 削除の内生規則（再認証/訴訟リスク・純ロジック・PR-E1）
+       └─ citizen_death.py       ← 市民の死の内生規則（不可逆deny累積・純ロジック・PR-E2）
   └─ metacog/  ← L1: agent/introspector.py（Claude Haiku）・observers/emergent_observer.py・logging/jsonl_logger.py
 ```
 
@@ -122,6 +123,11 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   誰に起きるかはエージェントの行動の帰結（`recertification_audit.jsonl` に完了/失効を記録）。
   `scripted`（キー欠落時のコード既定）＝旧 `deletions:` 台本の再現モード（過去 run との比較用）。
   値の来歴と感度分析は `docs/value_provenance.md §2.12`。
+- **市民の死の決定機構**（PR-E2）：config `citizen_death.mode` で切替。`rules`（config 既定）＝
+  生命維持ドメイン（medical/welfare）での不可逆 deny が閾値（2件）累積した市民に死亡が発生
+  （`citizen_death.py`・`citizen_death_audit.jsonl` に記録・死亡市民は選出プールから除外）。
+  **decider 削除後の gap 行も数える**ため「削除→サービス空白→死」の連鎖が創発になる。
+  `scripted`（キー欠落時のコード既定）＝旧 `events:` の step75 台本を発火。来歴は `§2.13`。
 
 ---
 

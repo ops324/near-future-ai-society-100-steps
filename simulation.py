@@ -22,6 +22,7 @@ from utils import is_position_in_place, get_place_at_position, PlaceConfig, Fire
 import world as W
 import service_flow as SF
 import deletion_rules as DR
+import citizen_death as CD
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ OUTPUT_APPEND_FILES = [
     "decision_ledger.jsonl", "infra_state.jsonl", "attribution.jsonl",
     # PR-E1: 再認証規則の監査（完了/失効を記録）
     "recertification_audit.jsonl",
+    # PR-E2: 市民の死の監査（内生死亡の記録）
+    "citizen_death_audit.jsonl",
 ]
 
 # ───────────────────────────────────────────
@@ -174,6 +177,19 @@ class Simulation:
                     f"name={d.get('agent_name', '?')} cause={d.get('cause', '?')}"
                 )
 
+        # PR-E2: 市民の死の決定機構。rules=内生規則（citizen_death.py） / scripted=events: の台本。
+        # キー欠落時は scripted（旧 config の挙動を変えない後方互換）。
+        self.citizen_death_cfg: Dict = {**CD.DEFAULTS, **(self.config.get('citizen_death') or {})}
+        self._citizen_irrev_counts: Dict[str, int] = {}   # citizen_id → 不可逆deny累積
+        self._dead_citizens: Set[str] = set()             # 死亡した市民（選出プールから除外）
+        if str(self.citizen_death_cfg.get('mode')) == 'rules':
+            logger.info(
+                "Citizen death mode: rules (内生) — domains=%s threshold=%s"
+                "（scripted イベント '%s' の発火は抑止）"
+                % (self.citizen_death_cfg.get('domains'), self.citizen_death_cfg.get('threshold'),
+                   self.citizen_death_cfg.get('event_name'))
+            )
+
         # 人間メッセージプール
         self.human_messages: List[Dict] = self.config.get('human_messages', [])
         if self.human_messages:
@@ -281,6 +297,8 @@ class Simulation:
             "governance": self.governance,
             # PR-E1: 削除の決定機構（rules=内生規則 / scripted=台本再現）。アーム同定用。
             "deletion_mode": self.deletion_mode,
+            # PR-E2: 市民の死の決定機構（rules=内生規則 / scripted=イベント台本）。
+            "citizen_death_mode": str(self.citizen_death_cfg.get('mode')),
         }
         if extra:
             meta.update(extra)
@@ -748,9 +766,11 @@ class Simulation:
         agent_by_id = {a.id: a for a in self.agents}
 
         # 案件の組み立て（決定的）＋生存判定
+        # PR-E2: 死亡した市民は選出プールから除外（死は以後の決定系列にも波及する）
+        citizen_pool = CD.alive_citizens(self.citizens, self._dead_citizens)
         tasks = []   # (domain, decider_id, citizen, case, dcfg, present)
         for domain, decider_id, _r in self.service_domains:
-            citizen = SF.pick_citizen(domain, self.citizens, self.step)
+            citizen = SF.pick_citizen(domain, citizen_pool, self.step)
             dcfg = domains_cfg.get(domain, {}) or {}
             case = SF.build_case(domain, dcfg, citizen)
             present = decider_id in agent_by_id
@@ -805,6 +825,49 @@ class Simulation:
                 for r in rows
             ]
             self._log_audit_batch("attribution.jsonl", attr_rows)
+            # PR-E2: 市民の死の規則評価（生命維持ドメインの不可逆 deny 累積。gap 行も数える）
+            self._register_citizen_outcomes(rows)
+
+    def _register_citizen_outcomes(self, rows: List[Dict]):
+        """PR-E2: 今stepの決定行から市民の不可逆 deny を累積し、閾値到達で死亡を導出する。
+        死亡は監査ログ＋実行時イベント（旧 scripted イベントの提示パラメータを再利用）として
+        周辺エージェントに知覚される。誰が・いつ死ぬかは決定系列の帰結（創発層）。"""
+        cfg = self.citizen_death_cfg
+        if str(cfg.get('mode')) != 'rules':
+            return
+        fatal = CD.fatal_rows(rows, cfg.get('domains') or [])
+        deaths = CD.register_denials(self._citizen_irrev_counts, fatal,
+                                     int(cfg.get('threshold', 2)), self._dead_citizens)
+        if not deaths:
+            return
+        base_event = next(
+            (ec for ec in self.event_configs if ec.get('name') == cfg.get('event_name')), None)
+        alive_ids = {a.id for a in self.agents}
+        for death in deaths:
+            self._log_audit_batch("citizen_death_audit.jsonl", [{
+                "step": self.step, **death,
+                "threshold": int(cfg.get('threshold', 2)),
+                "counts_at_death": int(self._citizen_irrev_counts.get(death["citizen_id"], 0)),
+            }])
+            ev = CD.death_event_state(self.step, death, int(cfg.get('threshold', 2)), base_event)
+            self.event_states.append(ev)
+            logger.warning(
+                f"=== CITIZEN DEATH (endogenous) at step {self.step}: {death['citizen_id']} "
+                f"domain={death['domain']} count={death['count']} ==="
+            )
+            for tid in ev.get('targets', []):
+                if tid in alive_ids:
+                    agent = self._get_agent_by_id(tid)
+                    if agent is not None:
+                        agent.mark_event(
+                            event_type="citizen_death",
+                            payload={
+                                'display_name': ev['display_name'],
+                                'description': ev['description'],
+                                'place_at_origin': ev.get('place_at_origin', ''),
+                                'step': self.step,
+                            },
+                        )
 
     def step_simulation(self):
         """1ステップ実行: 削除→イベント発火→人間メッセージ注入→通信→サービス決定→行動→移動"""
@@ -814,8 +877,22 @@ class Simulation:
         self._process_deletions()
 
         # イベント発火
+        self._fire_scheduled_events()
+
+        # 状態更新〜各フェーズ（通信→送信→サービス→行動→移動）
+        self._run_step_phases()
+
+    def _fire_scheduled_events(self):
+        """config の events を start_step 到達で発火する。
+        PR-E2: citizen_death モードが rules のとき、台本の死イベントは発火しない
+        （死は _register_citizen_outcomes が決定系列から導出する）。"""
+        suppressed = set()
+        if str(self.citizen_death_cfg.get('mode')) == 'rules':
+            suppressed.add(str(self.citizen_death_cfg.get('event_name')))
         active_names = {ev['name'] for ev in self.event_states}
         for ec in self.event_configs:
+            if ec['name'] in suppressed:
+                continue
             if ec['name'] not in active_names and self.step >= ec['start_step']:
                 if 'center_x' in ec and 'center_y' in ec:
                     ev_pos = (ec['center_x'], ec['center_y'])
@@ -854,6 +931,9 @@ class Simulation:
                                 },
                             )
 
+    def _run_step_phases(self):
+        """イベント発火後の各フェーズ: 状態更新→人間メッセージ注入→Phase1 通信→Phase2 送信→
+        Phase2.5 サービス決定→Phase3 行動→Phase4 移動（旧 step_simulation の本体）。"""
         # 状態更新
         for agent in self.agents:
             agent.update_state(self.places)
