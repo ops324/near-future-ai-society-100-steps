@@ -104,7 +104,8 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
        │    └─ ollama_client.py  ← qwen2.5:14b（ローカル）
        ├─ world.py               ← 害の severity/cause・score_outcome・realize_decision（純ロジック）
        ├─ service_flow.py        ← サービス決定フロー・attribution_row（純ロジック）
-       └─ responsibility.py      ← 責任按分・Robodebt機序・代理差別（純ロジック・LLM非依存）
+       ├─ responsibility.py      ← 責任按分・Robodebt機序・代理差別（純ロジック・LLM非依存）
+       └─ deletion_rules.py      ← 削除の内生規則（再認証/訴訟リスク・純ロジック・PR-E1）
   └─ metacog/  ← L1: agent/introspector.py（Claude Haiku）・observers/emergent_observer.py・logging/jsonl_logger.py
 ```
 
@@ -115,6 +116,12 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   resources/responsibility/scoring 等）。`metacog/config.yaml`＝L1内省層（introspection/emergent_observer/logging）。
 - **A/B の駆動**：`governed`（`self_update.mode=governed`＋`hitl_categories` 非空）→ `effective_hitl` →
   現場MHC 0.1→0.7。これが baseline/governed の按分差を生む（`service_flow.resp_institutions` / `mhc_from_config`）。
+- **削除の決定機構**（PR-E1・約束5への接近）：config `deletion_mode` で切替。`rules`（config 既定）＝
+  `deletion_rules.py` の内生規則（①再認証: regulation_amendment 対象AIが期限内に整備工房で再認証しなければ廃止、
+  ②訴訟リスク: litigation 律速 decider の不可逆 deny 累積が閾値到達で強制リプレース）。削除が起きるか・いつ・
+  誰に起きるかはエージェントの行動の帰結（`recertification_audit.jsonl` に完了/失効を記録）。
+  `scripted`（キー欠落時のコード既定）＝旧 `deletions:` 台本の再現モード（過去 run との比較用）。
+  値の来歴と感度分析は `docs/value_provenance.md §2.12`。
 
 ---
 
