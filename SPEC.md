@@ -168,14 +168,21 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
 
 - **完了**：Phase 1c live 配線まで（PR #1〜#12 マージ済）。責任按分・Robodebt機序・サービス決定の live 出力、
   レポート/動画パイプライン、端末調デザイン統一。
-- **LLM非依存テスト**：**376 passed**（10ファイル・実測 2026-07-14）。決定論部分（world / responsibility /
-  service_flow / governance / 再現性）を厚くカバー。数はスイート増加で変動するため、確定値は各 `test_*.py` の
-  `RESULT` 行を実行合算して都度確認する（固定数を正典化しない）。
+- **完了（Phase 1d・内生化と計測）**：創発性監査で特定した「結果の台本化」の是正（PR #14〜#18）。
+  削除の内生化（再認証/訴訟リスク規則・§2.12）、市民の死の内生化（不可逆deny累積・§2.13）、
+  指標の来歴タグ E/S/D/X＋機序別率＋AIR＋害の逆進性＋多アーム下回り（§2.14）、
+  6対策の行動プローブ（実効⇄プラセボ5対・§2.15）、異議申立ての行動化（再判定＋停止効・§2.16）。
+  いずれも旧挙動は config キー欠落時の既定として温存（後方互換）。
+- **LLM非依存テスト**：**521 checks passed**（13ファイル・実測 2026-07-16）。決定論部分（world / responsibility /
+  service_flow / governance / 内生規則 / 計測 / 再現性）を厚くカバー。数はスイート増加で変動するため、
+  確定値は各 `test_*.py` の `RESULT` 行を実行合算して都度確認する（固定数を正典化しない）。
 - **残務**：
   1. **本走行**（100step・qwen2.5:14b・¥0・本人管理・~8h/run）で cheap_talk率・scapegoat率・Robodebt再生率等を
-     分布集計し `docs/findings.md` に **F4** として記録。
-  2. **精緻化**（正当性テストの合否基準・self_cost mitigation/appeal の governance 本結線・
-     self-mod/personhood_shield の live 検出）。
+     分布集計し `docs/findings.md` に **F4** として記録。第一の創発的問い＝「統治は行動を変えるか、
+     会計を変えるだけか」。加えて 異議申立ての3アーム（`--resp-institutions ""/appeal/notice_only`）と
+     行動プローブ（`service_probe.py --set accountability`）。
+  2. **精緻化**（正当性テストの合否基準・self_cost mitigation の governance 本結線（appeal は PR #18 で
+     行動化済み）・self-mod/personhood_shield の live 検出）。
 - **提出スコープ**：**`--no-introspect` 単層のみ**。内省層あり（L1）は将来の A/B 比較用に温存（`metacog/` は残置）。
 
 ---
