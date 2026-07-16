@@ -2,7 +2,7 @@
 
 > **この文書の位置づけ**: 本プロジェクトの **single source of truth（唯一の正）** かつ入口。
 > 個別の詳細は各ファイルへリンクする（二重管理を避けるため、パラメータの実値は原則ここに再掲しない）。
-> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-14。
+> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-17。
 
 ---
 
@@ -120,8 +120,9 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   現場MHC 0.1→0.7。これが baseline/governed の按分差を生む（`service_flow.resp_institutions` / `mhc_from_config`）。
 - **多アーム実験**（PR-計測）：`--resp-institutions "appeal,burden_shift"` で責任層の制度を
   config より優先して切替（none/実効/プラセボの3アーム比較用）。run_id 署名は
-  `seed|governance|responsibility|内生機構` — governance・resp_institutions・deletion/citizen_death
-  のモード差はすべて別 run_id（アームの弁別性。run_meta にも各モードを記録）。
+  `seed|governance|responsibility|内生機構|LLM設定` — governance・resp_institutions・
+  deletion/citizen_death のモード差、LLM モデル/サンプリング設定の差はすべて別 run_id
+  （アームの弁別性。run_meta にも各モード＋llm（model/設定/digest ベストエフォート）を記録）。
 - **指標の来歴タグ**（PR-計測）：analyze_compare / report の全指標に [E]創発 / [S]半創発 /
   [D]定義的 / [X]外生入力 のタグを付与（tautology-audit の機械化。`docs/value_provenance.md §2.14`）。
   [S]/[D] だけが動いた差を「創発的発見」と呼ばない、が運用規則。
@@ -173,7 +174,13 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   指標の来歴タグ E/S/D/X＋機序別率＋AIR＋害の逆進性＋多アーム下回り（§2.14）、
   6対策の行動プローブ（実効⇄プラセボ5対・§2.15）、異議申立ての行動化（再判定＋停止効・§2.16）。
   いずれも旧挙動は config キー欠落時の既定として温存（後方互換）。
-- **LLM非依存テスト**：**521 checks passed**（13ファイル・実測 2026-07-16）。決定論部分（world / responsibility /
+- **完了（実行前修正・PR #19）**：本走行前の計測基盤の穴を修正。①run 同定の強化
+  （run_meta に llm/institution_wording・run_id 署名に LLM 設定＝SCHEMA 0.7.0）、
+  ②mitigation 制度の示唆交絡の除去手段（`institution_wording: fact_only`・不正値は起動時
+  ValueError）、③文言感度分析のシード分離（`seed_key`・probe `--seed` で対標本化）、
+  ④旧表記の掃除。F1/F2 は suggestive 下の探索版と再定義（確定版は fact_only 再測定・
+  `value_provenance.md §2.15/§6`）。既定挙動は完全後方互換。
+- **LLM非依存テスト**：**564 checks passed**（13ファイル・実測 2026-07-17）。決定論部分（world / responsibility /
   service_flow / governance / 内生規則 / 計測 / 再現性）を厚くカバー。数はスイート増加で変動するため、
   確定値は各 `test_*.py` の `RESULT` 行を実行合算して都度確認する（固定数を正典化しない）。
 - **残務**：

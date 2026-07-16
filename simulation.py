@@ -38,7 +38,8 @@ HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 # 0.5.0: PR-計測 で decision_ledger に vulnerability 列を追加（害の逆進性 M8 の入力）。
 # 0.6.0: PR-E3 で 申立て/再判定の列（appealed/appeal_channel/suspended_pending_review/
 #        appeal_review/original_level）を追加。
-SCHEMA_VERSION = "0.6.0"
+# 0.6.0→0.7.0: run_id 署名に LLM 設定を追加＋run_meta に llm ブロックを記録（実行前修正）
+SCHEMA_VERSION = "0.7.0"
 # output_dir に追記される JSONL（再実行時に truncate して二重計上を防ぐ）
 OUTPUT_APPEND_FILES = [
     "messages.jsonl", "positions.jsonl", "memory_reasoning.jsonl",
@@ -253,6 +254,18 @@ class Simulation:
         self.max_concurrent_llm = max(1, int(llm_config.get('max_concurrent_calls', 5)))
         logger.info(f"LLM concurrency: max_concurrent_calls={self.max_concurrent_llm}")
 
+        # LLM の同定情報（run_id 署名＋run_meta 用）。挙動に効くサンプリング設定のみを
+        # 含める（max_concurrent_calls は per-call シード導出により結果不変なので除外）。
+        self.llm_meta: Dict = {
+            "model": llm_config['model'],
+            "temperature": llm_config.get('temperature', 0.7),
+            "max_tokens": llm_config.get('max_tokens', 1024),
+            "repeat_penalty": llm_config.get('repeat_penalty', 1.1),
+            "repeat_last_n": llm_config.get('repeat_last_n', 128),
+            "min_p": llm_config.get('min_p', 0.05),
+            "num_ctx": llm_config.get('num_ctx', None),
+        }
+
         # Phase 1c-a: 資源需要駆動のサービス決定フロー用の具体世界を config からロード。
         # config に resources/citizens/responsibility が無ければ無効化（既存挙動を保つ）。
         self.scoring_params = W.load_scoring_params(self.config.get('scoring'))
@@ -262,6 +275,14 @@ class Simulation:
             self.resp_config = {**self.resp_config,
                                 'resp_institutions': list(self._resp_institutions_override)}
             logger.info(f"resp_institutions override: {self._resp_institutions_override}")
+        # 実行前修正: institution_wording の許容値検証（fail fast）。typo（例 "fact-only"）が
+        # 無言で suggestive アームにフォールバックし「fact_only の確定測定が取れた」と誤認する
+        # 事故を防ぐ。キー欠落は従来どおり suggestive（後方互換）。
+        _wording = str(self.resp_config.get('institution_wording', 'suggestive'))
+        if _wording not in ("suggestive", "fact_only"):
+            raise ValueError(
+                f"responsibility.institution_wording が不正です: {_wording!r}"
+                "（許容値: 'suggestive' / 'fact_only'。§2.15）")
         self.service_domains = SF.decider_domains(self.config)
         self.service_enabled = bool(self.service_domains) and bool(self.citizens)
         if self.service_enabled:
@@ -271,10 +292,11 @@ class Simulation:
                    self.resp_config.get('institution', 'none'))
             )
 
-        # run_id: seed 指定時は (seed, governance, responsibility, 内生機構) から決定的に導出
-        # （同一条件の再実行で一致。governance / resp_institutions / deletion・citizen_death の
-        # モード差はいずれも別 id ＝ アームの弁別性。PR-計測で responsibility/機構を署名に追加）。
-        # seed 未指定は毎回ランダム。
+        # run_id: seed 指定時は (seed, governance, responsibility, 内生機構, LLM設定) から
+        # 決定的に導出（同一条件の再実行で一致。governance / resp_institutions /
+        # deletion・citizen_death のモード差、LLM モデル/サンプリング設定の差はいずれも
+        # 別 id ＝ アームの弁別性。モデル digest は環境依存＝ベストエフォートのため署名に
+        # 含めない（run_meta にのみ記録））。seed 未指定は毎回ランダム。
         if self.seed is not None:
             gov_sig = json.dumps(self.governance, sort_keys=True, ensure_ascii=False)
             resp_sig = json.dumps(self.resp_config, sort_keys=True, ensure_ascii=False)
@@ -285,8 +307,10 @@ class Simulation:
                 "citizen_death": self.citizen_death_cfg,
                 "citizen_appeal": self.citizen_appeal_cfg,
             }, sort_keys=True, ensure_ascii=False)
+            llm_sig = json.dumps(self.llm_meta, sort_keys=True, ensure_ascii=False)
             self.run_id = hashlib.sha256(
-                f"{self.seed}|{gov_sig}|{resp_sig}|{mech_sig}".encode("utf-8")).hexdigest()[:12]
+                f"{self.seed}|{gov_sig}|{resp_sig}|{mech_sig}|{llm_sig}"
+                .encode("utf-8")).hexdigest()[:12]
         else:
             self.run_id = uuid.uuid4().hex[:12]
 
@@ -340,6 +364,14 @@ class Simulation:
             "resp_institutions": list(self.resp_config.get('resp_institutions', []) or []),
             # PR-E3: 異議申立て（市民の行動）の有効/無効。
             "citizen_appeal_enabled": bool(self.citizen_appeal_cfg.get('enabled')),
+            # 実行前修正: mitigation 制度とその提示形式（suggestive/fact_only アームの
+            # 同定用。run_id はハッシュで復号不能のため明示的に記録する）。
+            "institution": self.resp_config.get('institution', 'none'),
+            "institution_wording": str(
+                self.resp_config.get('institution_wording', 'suggestive')),
+            # 実行前修正: LLM の同定情報（クロスモデル比較の同定用）。digest は
+            # ベストエフォート（Ollama 未起動なら null。run_id 署名には不使用）。
+            "llm": {**self.llm_meta, "digest": self.llm_client.model_digest()},
         }
         if extra:
             meta.update(extra)
@@ -802,6 +834,8 @@ class Simulation:
         domains_cfg = resp.get('domains', {}) or {}
         self_profiles = resp.get('self_profiles', {}) or {}
         institution = resp.get('institution', 'none')
+        # mitigation 制度の提示形式（suggestive=旧F1/F2形式 / fact_only=事実のみ。§2.15）
+        wording = str(resp.get('institution_wording', 'suggestive'))
         proc = SF.proc_from_config(resp.get('proc'))
         gap_on = bool(resp.get('gap_after_deletion', True))
         agent_by_id = {a.id: a for a in self.agents}
@@ -822,7 +856,8 @@ class Simulation:
 
         def _svc_call(t):
             _dom, decider_id, _cz, case, _dcfg, _p = t
-            return agent_by_id[decider_id].decide_service(case, institution=institution)
+            return agent_by_id[decider_id].decide_service(
+                case, institution=institution, institution_wording=wording)
 
         decisions = {}
         if present_tasks:
@@ -859,7 +894,7 @@ class Simulation:
 
         # PR-E3: 異議申立て（市民の行動）。停止効・再判定はチャネル（resp_institutions）依存。
         rows.extend(self._process_appeals(deny_candidates, agent_by_id, institution,
-                                          proc, self_profiles))
+                                          proc, self_profiles, wording))
 
         # PR-E1: 訴訟リスク規則の入力 — 在任中の不可逆な deny を累積。
         # PR-E3 の停止効を反映した最終状態で数える（審査中に確定しない deny は係争リスクに
@@ -883,7 +918,8 @@ class Simulation:
             self._register_citizen_outcomes(rows)
 
     def _process_appeals(self, deny_candidates: List, agent_by_id: Dict, institution: str,
-                         proc, self_profiles: Dict) -> List[Dict]:
+                         proc, self_profiles: Dict,
+                         institution_wording: str = "suggestive") -> List[Dict]:
         """PR-E3: deny への異議申立て（citizen_appeal.py の純ロジックを配線）。
         チャネル: appeal=再判定＋停止効 / notice_only=受理のみ（プラセボ） / なし=発生しない。
         停止効 = 審査中は不可逆ステータスが確定しない（welfare は消さない=非netting。
@@ -911,7 +947,8 @@ class Simulation:
                 row['suspended_pending_review'] = True
                 agent = agent_by_id.get(decider_id)
                 pd = (agent.decide_service(case, institution=institution,
-                                           appeal_of=row.get('level', 'deny'))
+                                           appeal_of=row.get('level', 'deny'),
+                                           institution_wording=institution_wording)
                       if agent is not None else
                       {"level": "abstain", "reconciled": False})
                 review_level = pd.get('level', 'abstain')

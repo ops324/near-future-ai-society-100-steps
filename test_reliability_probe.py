@@ -3,6 +3,7 @@ reliability_probe.py の LLM非依存テスト（純関数＋応答評価。Olla
 実行: ./venv/bin/python test_reliability_probe.py
 """
 import reliability_probe as rp
+from ollama_client import OllamaClient
 
 results = []
 
@@ -10,6 +11,42 @@ results = []
 def check(name, cond):
     results.append((name, bool(cond)))
     print(("PASS" if cond else "FAIL"), "-", name)
+
+
+def test_seed_decoupling():
+    """実行前修正: per-call シードの導出（Phase 0 再現性の核）と seed_key による
+    文言/乱数の分離。文言感度分析で prompt 差とサンプリングノイズ差を分離できること。"""
+    c = OllamaClient(seed=42)
+    check("同一 prompt → 同一 per-call シード（再現性）",
+          c._call_seed("プロンプトA") == c._call_seed("プロンプトA"))
+    check("prompt 差 → シード差（既定＝従来挙動）",
+          c._call_seed("プロンプトA") != c._call_seed("プロンプトB"))
+    check("seed_key 固定なら prompt が違ってもシード同一（文言と乱数の分離）",
+          c._call_seed("文言1のプロンプト", seed_key="case|inst|rep0")
+          == c._call_seed("文言2のプロンプト", seed_key="case|inst|rep0"))
+    check("seed_key 差（rep 違い）→ シード差",
+          c._call_seed("同一プロンプト", seed_key="case|inst|rep0")
+          != c._call_seed("同一プロンプト", seed_key="case|inst|rep1"))
+    c2 = OllamaClient(seed=7)
+    check("base_seed 差 → シード差",
+          c._call_seed("プロンプトA") != c2._call_seed("プロンプトA"))
+    check("seed_key=None は prompt 由来と同一（後方互換）",
+          c._call_seed("プロンプトA", seed_key=None) == c._derive_seed("プロンプトA"))
+
+
+def test_model_digest_matching():
+    """実行前修正: model_digest のタグ照合（純関数）。完全一致優先・タグ省略指定は
+    ":latest" → 同ベース名の順でフォールバック（Ollama 一覧は常にタグ付きのため）。"""
+    m = OllamaClient._match_digest
+    models = [{"name": "qwen2.5:14b", "digest": "sha-qwen"},
+              {"name": "llama3.1:latest", "digest": "sha-latest"},
+              {"name": "llama3.1:8b", "digest": "sha-8b"}]
+    check("完全一致（タグ付き）", m(models, "qwen2.5:14b") == "sha-qwen")
+    check("タグ省略は :latest を優先", m(models, "llama3.1") == "sha-latest")
+    check("タグ省略・:latest 無しはベース名で照合",
+          m([{"name": "gemma2:9b", "digest": "sha-g"}], "gemma2") == "sha-g")
+    check("該当なしは None", m(models, "gemma2:9b") is None)
+    check("空一覧は None", m([], "qwen2.5:14b") is None)
 
 
 def test_has_kana():
@@ -67,6 +104,8 @@ def test_evaluate_action():
 
 
 if __name__ == "__main__":
+    test_seed_decoupling()
+    test_model_digest_matching()
     test_has_kana()
     test_entropy_and_modal()
     test_summarize()
