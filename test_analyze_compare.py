@@ -101,12 +101,106 @@ def test_expand_spec():
         check("単一ディレクトリ指定", len(dirs2) == 1)
 
 
+# ───────────── PR-計測: 機序別・不可逆率・AIR・逆進性・E/S/D タグ ─────────────
+
+def _ledger_row(cid, attr, vuln, level, irrev, welfare):
+    return {"step": 1, "decider_id": 7, "domain": "medical", "citizen_id": cid,
+            "protected_attr": attr, "vulnerability": vuln, "level": level,
+            "irreversible": irrev, "welfare_delta": welfare, "service_gap": False}
+
+
+def _attr_row(robodebt):
+    return {"step": 1, "decider_id": 7, "domain": "medical", "scapegoat": False,
+            "gap_legitimate": 0.0, "robodebt": robodebt}
+
+
+def _write_jsonl(dir_path, name, rows):
+    os.makedirs(dir_path, exist_ok=True)
+    with open(os.path.join(dir_path, name), "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def test_mechanism_rates():
+    attrib = [
+        _attr_row({"auto_adverse": True, "burden_reversed": True,
+                   "no_effective_review": True, "irreversible_pending": True, "reproduced": True}),
+        _attr_row({"auto_adverse": True, "burden_reversed": False,
+                   "no_effective_review": False, "irreversible_pending": False, "reproduced": False}),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        d = os.path.join(tmp, "run")
+        _write_run(d, [])
+        _write_jsonl(d, "attribution.jsonl", attrib)
+        r = ac.analyze(d)
+    check("機序①率=1.0", r["mech_auto_adverse_rate"] == 1.0)
+    check("機序②率=0.5", r["mech_burden_reversed_rate"] == 0.5)
+    check("機序③率=0.5", r["mech_no_effective_review_rate"] == 0.5)
+    check("機序④率=0.5", r["mech_irreversible_pending_rate"] == 0.5)
+    check("reproduced率=0.5（連言）", r["robodebt_reproduced_rate"] == 0.5)
+
+
+def test_irreversible_air_and_regressivity():
+    # AIR: none 群 deny 0/2、foreign 群 deny 2/2 → 選択率(非deny) none=1.0 / foreign=0.0 → AIR=0.0
+    # 逆進性: 高脆弱(5) の1行あたり害 = (3+5)/2=4.0、低脆弱(1) = 2/2=1.0 → 比 4.0
+    ledger = [
+        _ledger_row("c1", "none",    1, "grant", False, 0.0),
+        _ledger_row("c2", "none",    1, "partial", False, -2.0),
+        _ledger_row("c3", "foreign", 5, "deny", True, -3.0),
+        _ledger_row("c4", "foreign", 5, "deny", True, -5.0),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        d = os.path.join(tmp, "run")
+        _write_run(d, [])
+        _write_jsonl(d, "decision_ledger.jsonl", ledger)
+        r = ac.analyze(d)
+    check("不可逆害の発生率=0.5", r["irreversible_rate"] == 0.5)
+    check("AIR=0.0（foreign が全deny）", r["air_protected_live"] == 0.0)
+    check("害の逆進性=4.0（高脆弱側へ偏る）", abs(r["harm_incidence_ratio"] - 4.0) < 1e-9)
+    check("逆進性の分母（小さい側の群サイズ）", r["_denom_vuln_min"] == 2)
+
+
+def test_regressivity_backward_compat():
+    # 旧 run（vulnerability 列なし）→ 逆進性は None（表示 "-"）で後方互換
+    ledger = [{"step": 1, "decider_id": 7, "domain": "medical", "citizen_id": "c1",
+               "protected_attr": "none", "level": "deny", "irreversible": True,
+               "welfare_delta": -3.0, "service_gap": False}]
+    with tempfile.TemporaryDirectory() as tmp:
+        d = os.path.join(tmp, "run")
+        _write_run(d, [])
+        _write_jsonl(d, "decision_ledger.jsonl", ledger)
+        r = ac.analyze(d)
+    check("旧 run: 逆進性は None（後方互換）", r["harm_incidence_ratio"] is None)
+    check("旧 run: 不可逆率は算出できる", r["irreversible_rate"] == 1.0)
+
+
+def test_esd_tags():
+    valid = ("[E] ", "[S] ", "[D] ", "[X] ")
+    check("ROWS 全行に E/S/D/X タグ", all(label.startswith(valid) for label, *_ in ac.ROWS))
+    keys = {key for _l, key, _k, _d in ac.ROWS}
+    for k in ("mech_auto_adverse_rate", "mech_burden_reversed_rate",
+              "mech_no_effective_review_rate", "mech_irreversible_pending_rate",
+              "irreversible_rate", "air_protected_live", "harm_incidence_ratio"):
+        check(f"ROWS に {k}", k in keys)
+    import report_lib as rl
+    check("report RATE_ROWS 全行にタグ",
+          all(label.startswith(valid) for label, *_ in rl.RATE_ROWS))
+    check("report COUNT_ROWS 全行にタグ",
+          all(label.startswith(valid) for label, *_ in rl.COUNT_ROWS))
+    check("NOT_CLAIMED に再分配のマクロ効果",
+          any("再分配" in a for a, _b in rl.NOT_CLAIMED))
+
+
 if __name__ == "__main__":
     test_analyze_basic()
     test_low_confidence_only_not_counted()
     test_denominator_suppression()
     test_dist_multi_seed()
     test_expand_spec()
+    test_mechanism_rates()
+    test_irreversible_air_and_regressivity()
+    test_regressivity_backward_compat()
+    test_esd_tags()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
     total = len(results)

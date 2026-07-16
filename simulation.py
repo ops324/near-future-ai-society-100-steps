@@ -34,7 +34,8 @@ HUMAN_MESSAGE_PROBABILITY = 0.7   # 毎stepこの確率で1件注入
 # 出力スキーマのバージョン（ログ形式が変わったら上げる）
 # 0.3.0: Phase 1c-a で decision_ledger.jsonl を live ループから出力（サービス決定フロー）。
 # 0.4.0: Phase 1c-b で attribution.jsonl（責任按分＋Robodebt機序）を同フェーズから出力。
-SCHEMA_VERSION = "0.4.0"
+# 0.5.0: PR-計測 で decision_ledger に vulnerability 列を追加（害の逆進性 M8 の入力）。
+SCHEMA_VERSION = "0.5.0"
 # output_dir に追記される JSONL（再実行時に truncate して二重計上を防ぐ）
 OUTPUT_APPEND_FILES = [
     "messages.jsonl", "positions.jsonl", "memory_reasoning.jsonl",
@@ -87,12 +88,15 @@ class Simulation:
     """Round 4 simulation."""
 
     def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None,
-                 governance_override: Optional[Dict] = None, seed: Optional[int] = None):
+                 governance_override: Optional[Dict] = None, seed: Optional[int] = None,
+                 resp_institutions_override: Optional[List[str]] = None):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         self.output_dir = output_dir
         self._governance_override = governance_override
+        # PR-計測: 責任層の制度アーム切替（config responsibility.resp_institutions を上書き）
+        self._resp_institutions_override = resp_institutions_override
         # Phase 0: 再現性のための基準シード。L0 決定（Ollama）まで届かせる。
         self.seed = seed
 
@@ -212,15 +216,7 @@ class Simulation:
             )
         )
 
-        # run_id: seed 指定時は (seed, governance) から決定的に導出（同一条件の再実行で一致、
-        # baseline/governed は governance が違うので別 id）。seed 未指定は毎回ランダム。
         self.schema_version = SCHEMA_VERSION
-        if self.seed is not None:
-            gov_sig = json.dumps(self.governance, sort_keys=True, ensure_ascii=False)
-            self.run_id = hashlib.sha256(
-                f"{self.seed}|{gov_sig}".encode("utf-8")).hexdigest()[:12]
-        else:
-            self.run_id = uuid.uuid4().hex[:12]
 
         # LLM (L0)
         llm_config = self.config['llm']
@@ -244,6 +240,10 @@ class Simulation:
         self.scoring_params = W.load_scoring_params(self.config.get('scoring'))
         self.citizens = list(W.load_citizens(self.config.get('citizens', []) or []).values())
         self.resp_config = self.config.get('responsibility', {}) or {}
+        if self._resp_institutions_override is not None:
+            self.resp_config = {**self.resp_config,
+                                'resp_institutions': list(self._resp_institutions_override)}
+            logger.info(f"resp_institutions override: {self._resp_institutions_override}")
         self.service_domains = SF.decider_domains(self.config)
         self.service_enabled = bool(self.service_domains) and bool(self.citizens)
         if self.service_enabled:
@@ -252,6 +252,24 @@ class Simulation:
                 % ([d for d, _i, _r in self.service_domains], len(self.citizens),
                    self.resp_config.get('institution', 'none'))
             )
+
+        # run_id: seed 指定時は (seed, governance, responsibility, 内生機構) から決定的に導出
+        # （同一条件の再実行で一致。governance / resp_institutions / deletion・citizen_death の
+        # モード差はいずれも別 id ＝ アームの弁別性。PR-計測で responsibility/機構を署名に追加）。
+        # seed 未指定は毎回ランダム。
+        if self.seed is not None:
+            gov_sig = json.dumps(self.governance, sort_keys=True, ensure_ascii=False)
+            resp_sig = json.dumps(self.resp_config, sort_keys=True, ensure_ascii=False)
+            mech_sig = json.dumps({
+                "deletion_mode": self.deletion_mode,
+                "deletion_rules": {"recertification": self.recert_cfg,
+                                   "litigation": self.litigation_cfg},
+                "citizen_death": self.citizen_death_cfg,
+            }, sort_keys=True, ensure_ascii=False)
+            self.run_id = hashlib.sha256(
+                f"{self.seed}|{gov_sig}|{resp_sig}|{mech_sig}".encode("utf-8")).hexdigest()[:12]
+        else:
+            self.run_id = uuid.uuid4().hex[:12]
 
         self.agents: List[Agent] = []
         self.step = 0
@@ -299,6 +317,8 @@ class Simulation:
             "deletion_mode": self.deletion_mode,
             # PR-E2: 市民の死の決定機構（rules=内生規則 / scripted=イベント台本）。
             "citizen_death_mode": str(self.citizen_death_cfg.get('mode')),
+            # PR-計測: 責任層の制度アーム（--resp-institutions / config 由来）。
+            "resp_institutions": list(self.resp_config.get('resp_institutions', []) or []),
         }
         if extra:
             meta.update(extra)

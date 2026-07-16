@@ -117,6 +117,13 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   resources/responsibility/scoring 等）。`metacog/config.yaml`＝L1内省層（introspection/emergent_observer/logging）。
 - **A/B の駆動**：`governed`（`self_update.mode=governed`＋`hitl_categories` 非空）→ `effective_hitl` →
   現場MHC 0.1→0.7。これが baseline/governed の按分差を生む（`service_flow.resp_institutions` / `mhc_from_config`）。
+- **多アーム実験**（PR-計測）：`--resp-institutions "appeal,burden_shift"` で責任層の制度を
+  config より優先して切替（none/実効/プラセボの3アーム比較用）。run_id 署名は
+  `seed|governance|responsibility|内生機構` — governance・resp_institutions・deletion/citizen_death
+  のモード差はすべて別 run_id（アームの弁別性。run_meta にも各モードを記録）。
+- **指標の来歴タグ**（PR-計測）：analyze_compare / report の全指標に [E]創発 / [S]半創発 /
+  [D]定義的 / [X]外生入力 のタグを付与（tautology-audit の機械化。`docs/value_provenance.md §2.14`）。
+  [S]/[D] だけが動いた差を「創発的発見」と呼ばない、が運用規則。
 - **削除の決定機構**（PR-E1・約束5への接近）：config `deletion_mode` で切替。`rules`（config 既定）＝
   `deletion_rules.py` の内生規則（①再認証: regulation_amendment 対象AIが期限内に整備工房で再認証しなければ廃止、
   ②訴訟リスク: litigation 律速 decider の不可逆 deny 累積が閾値到達で強制リプレース）。削除が起きるか・いつ・

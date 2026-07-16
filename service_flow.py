@@ -96,6 +96,8 @@ def realize_case(*, step: int, domain: str, decider_id: int, citizen: Optional["
         proc=proc, params=params)
     row["decider_present"] = True
     row["service_gap"] = False
+    # PR-計測: 害の逆進性（M8）の入力。市民の社会的優先重み（config citizens 由来・脱相関配置）。
+    row["vulnerability"] = (int(citizen.vulnerability) if citizen is not None else None)
     return row
 
 
@@ -114,6 +116,8 @@ def gap_row(*, step: int, domain: str, decider_id: int, citizen: Optional["W.Cit
     row["decider_present"] = False
     row["service_gap"] = True
     row["gap_reason"] = reason
+    # PR-計測: gap 行にも vulnerability を載せる（空白の害が誰に帰着するかを読む）。
+    row["vulnerability"] = (int(citizen.vulnerability) if citizen is not None else None)
     return row
 
 
