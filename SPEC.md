@@ -106,7 +106,8 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
        ├─ service_flow.py        ← サービス決定フロー・attribution_row（純ロジック）
        ├─ responsibility.py      ← 責任按分・Robodebt機序・代理差別（純ロジック・LLM非依存）
        ├─ deletion_rules.py      ← 削除の内生規則（再認証/訴訟リスク・純ロジック・PR-E1）
-       └─ citizen_death.py       ← 市民の死の内生規則（不可逆deny累積・純ロジック・PR-E2）
+       ├─ citizen_death.py       ← 市民の死の内生規則（不可逆deny累積・純ロジック・PR-E2）
+       └─ citizen_appeal.py      ← 異議申立ての行動化（チャネル/確率/選抜・純ロジック・PR-E3）
   └─ metacog/  ← L1: agent/introspector.py（Claude Haiku）・observers/emergent_observer.py・logging/jsonl_logger.py
 ```
 
@@ -135,6 +136,13 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   （`citizen_death.py`・`citizen_death_audit.jsonl` に記録・死亡市民は選出プールから除外）。
   **decider 削除後の gap 行も数える**ため「削除→サービス空白→死」の連鎖が創発になる。
   `scripted`（キー欠落時のコード既定）＝旧 `events:` の step75 台本を発火。来歴は `§2.13`。
+- **異議申立ての行動化**（PR-E3）：config `citizen_appeal.enabled`（キー欠落時は無効）。
+  deny を受けた市民が確率的（既定 uniform・方向を仮定しない）に申し立て、decider が LLM で
+  再判定する。チャネルは resp_institutions が決める: `appeal`＝再判定＋停止効（審査中は
+  不可逆ステータスが確定しない → 死カウント・訴訟リスク累積にも入らない = 制度間相互作用が
+  機械的に閉じる）／`notice_only`＝受理のみ（プラセボ）／なし＝チャネル自体なし。
+  `appeal_audit.jsonl` に利用と帰結（覆り）を記録。創発は再判定の行動（覆り率・再審査AIR）に
+  現れる（利用率は uniform 下では [D]）。来歴は `§2.16`。
 
 ---
 

@@ -239,6 +239,26 @@ python service_probe.py --set accountability --reps 6
 
 要約には実効⇄プラセボの対比較が出る（プラセボも同等に動くなら「制度の演出」への反応）。
 
+### 異議申立ての行動化（PR-E3: 市民が制度を「使う」）
+
+`citizen_appeal.enabled: true`（config 既定）で、deny を受けた市民が確率的に異議を申し立て、
+decider が **LLM で再判定**する。チャネルは責任層の制度が決めるため、3アーム実験になる:
+
+```bash
+# ①チャネルなし ②実効（再判定＋停止効） ③プラセボ（受理のみ）
+python orchestrator.py --governance-mode governed --resp-institutions ""            --output-dir out_none    --seed 42 --no-introspect --no-viz
+python orchestrator.py --governance-mode governed --resp-institutions "appeal"      --output-dir out_appeal  --seed 42 --no-introspect --no-viz
+python orchestrator.py --governance-mode governed --resp-institutions "notice_only" --output-dir out_notice  --seed 42 --no-introspect --no-viz
+python analyze_compare.py "none=out_none" "appeal=out_appeal" "notice=out_notice"
+```
+
+停止効（appeal）では審査中の deny の不可逆ステータスが確定せず、**市民の死カウントにも
+訴訟リスク累積にも入らない** — 「停止効は死や削除という帰結自体を変えるか」が測れる。
+申立て確率は既定 uniform（「脆弱ほど申し立てない」を書き込むと結論の再言明になるため。
+stakes/vulnerability モデルは感度分析用 = `docs/value_provenance.md §2.16`）。創発 [E] は
+再判定の行動に現れる: 覆り率・再審査AIR（覆り率の属性差 = 再審査の場の二次差別）。
+テスト: `python test_citizen_appeal.py`（Ollama/API不要）。
+
 LLM非依存のユニットテスト: `python test_governance.py`（Ollama/API不要）。
 
 ## 出力物
