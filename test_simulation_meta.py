@@ -176,6 +176,41 @@ def test_institution_wording_arm():
         check("不正な institution_wording は起動時 ValueError", raised)
 
 
+def test_institution_override_arm():
+    """PR-C: mitigation 制度アーム（--service-institution）— institution 上書きは run_id を
+    変え（弁別性）、resp_config/run_meta に反映され、不正値は起動時 ValueError。
+    none（折り合い不可能）と mitigation あり（折り合い可能）を別 run として比較するための土台。"""
+    with tempfile.TemporaryDirectory() as t:
+        s_none = _sim(os.path.join(t, "a"), 42, GOVERNANCE_GOVERNED)  # institution=none（config既定）
+        out_sh = os.path.join(t, "b")
+        s_sh = Simulation(config_path="config.yaml", output_dir=out_sh,
+                          governance_override=GOVERNANCE_GOVERNED, seed=42,
+                          institution_override="safe_harbor",
+                          institution_wording_override="fact_only")
+        s_sh2 = Simulation(config_path="config.yaml", output_dir=os.path.join(t, "c"),
+                           governance_override=GOVERNANCE_GOVERNED, seed=42,
+                           institution_override="safe_harbor",
+                           institution_wording_override="fact_only")
+        check("institution 上書き差 → run_id 違い（アーム弁別性）", s_none.run_id != s_sh.run_id)
+        check("同一 institution+wording → 同一 run_id（再現性）", s_sh.run_id == s_sh2.run_id)
+        check("resp_config に institution を反映", s_sh.resp_config.get("institution") == "safe_harbor")
+        check("resp_config に wording を反映",
+              s_sh.resp_config.get("institution_wording") == "fact_only")
+        s_sh.write_run_meta()
+        with open(os.path.join(out_sh, "run_meta.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        check("run_meta に上書き後の institution を記録", meta.get("institution") == "safe_harbor")
+
+        raised = False
+        try:
+            Simulation(config_path="config.yaml", output_dir=os.path.join(t, "d"),
+                       governance_override=GOVERNANCE_GOVERNED, seed=42,
+                       institution_override="bogus_institution")
+        except ValueError:
+            raised = True
+        check("不正な institution_override は起動時 ValueError", raised)
+
+
 if __name__ == "__main__":
     test_run_id_determinism()
     test_reset_output_logs()
@@ -184,6 +219,7 @@ if __name__ == "__main__":
     test_run_id_mechanism_discrimination()
     test_run_id_llm_discrimination()
     test_institution_wording_arm()
+    test_institution_override_arm()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)
     total = len(results)

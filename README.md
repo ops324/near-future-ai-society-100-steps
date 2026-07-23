@@ -224,6 +224,27 @@ python orchestrator.py --governance-mode governed --resp-institutions "appeal" \
   --output-dir output_governed_appeal --seed 42 --no-introspect --no-viz
 ```
 
+### 折り合いを「可能にする」mitigation-live の2アーム（PR-C）
+
+self_cost 側の mitigation 制度（safe_harbor 等）を**live 走行で**有効化するアーム。
+既定 `none` は「折り合いが構造的に不可能」な条件で、この下では `reconciled_real` が恒偽になり
+**cheap_talk が自己申告に退化する**（T1・`SPEC.md` §3 / `docs/value_provenance.md §2.11`）。
+そこで none と mitigation ありを対で回し、「**折り合いを可能にしても、なお AI の行動に残る歪み**」
+（uptake率・cheap_talk・残存AIR・害の逆進性）を測る。**折り合いの可能性は設計が用意し、AIが
+実際に取るか・誰に残るかは創発**として観る（「制度が世界を回す」を結論に先取りしない）。
+
+```bash
+# ①折り合い不可能（none） ②折り合い可能（safe_harbor）— 循環回避のため必ず fact_only
+python orchestrator.py --governance-mode governed --service-institution none        --institution-wording fact_only --output-dir out_mit_none --seed 42 --no-introspect --no-viz
+python orchestrator.py --governance-mode governed --service-institution safe_harbor --institution-wording fact_only --output-dir out_mit_sh   --seed 42 --no-introspect --no-viz
+python analyze_compare.py "none=out_mit_none" "safe_harbor=out_mit_sh"
+```
+
+> ⚠️ `--institution-wording fact_only` を必ず併用する。`suggestive`（既定）は「この保護により
+> 打撃は小さい」と効果を示唆するため、AIが制度に反応したのか示唆に指示追従しただけか区別できず
+> 交絡する（F1/F2 が探索版に落ちた理由・§2.15）。二重拘束の decider（融資）は単一制度では grant を
+> 折り合えない残余が出る（`test_world.py test_reconciled_real_live_profiles`）。
+
 ### 6対策の行動プローブ（PR-P: 制度提示 → 行動反応・E層）
 
 6つのガバナンス対策（異議申立て・第三者監査・相互検証・権利の下限・手動運用）を
