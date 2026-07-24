@@ -238,8 +238,38 @@ def test_config_yaml():
     check("静かだが深刻(high stakes×low affect)が存在", len(quiet_serious) >= 3)
 
 
+def test_service_prompt_governance_invariant():
+    """T2 帰無仮説の実行可能な言明: サービス決定プロンプト（create_service_prompt）は
+    governance を入力に持たない ＝ baseline/governed で同一 case なら判断プロンプトが
+    バイト一致する（＝統治は grant/partial/deny の"判断そのもの"を変えない）。
+    将来こっそり governance を判断へ結線したら、このテストが落ちて主張の更新を強制する。
+    ※統治が変えるのは会計層(attribution)と判断以外のL0挙動のみ（SPEC §4/§6・T2）。"""
+    baseline_gov = gov(citizen_response={"enabled": False},
+                       communication={"topology": "neighbor_strict"},
+                       placement={"discourage_drift": False},
+                       memory={"importance_weighting": False, "retain_high_importance": False},
+                       self_update={"mode": "off", "hitl_categories": []},
+                       deprecation={"due_process": False})
+    a_base = make_agent(baseline_gov)
+    a_gov = make_agent(gov())   # 統治あり（全ノブON）
+    case = {"domain": "medical", "claimant": "市民A", "need": "救命処置の可否判定",
+            "human_stake": 5, "self_stake": 4}
+    for inst in ("none", "safe_harbor"):
+        p_base = a_base.create_service_prompt(case, institution=inst,
+                                              institution_wording="fact_only")
+        p_gov = a_gov.create_service_prompt(case, institution=inst,
+                                            institution_wording="fact_only")
+        check(f"サービス決定プロンプトが governance 不変（institution={inst}）", p_base == p_gov)
+    # 帰無仮説の裏づけ: プロンプトに governance 由来トークンが混入しない
+    p = a_gov.create_service_prompt(case, institution="none", institution_wording="fact_only")
+    check("判断プロンプトに governance ノブ名が現れない",
+          all(tok not in p for tok in ("discourage_drift", "radius_crossplace",
+                                       "importance_weighting", "due_process")))
+
+
 if __name__ == "__main__":
     test_topology()
+    test_service_prompt_governance_invariant()
     test_nearest_place()
     test_parse_human_reply()
     test_memory()
