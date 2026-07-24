@@ -2,7 +2,8 @@
 
 > **この文書の位置づけ**: 本プロジェクトの **single source of truth（唯一の正）** かつ入口。
 > 個別の詳細は各ファイルへリンクする（二重管理を避けるため、パラメータの実値は原則ここに再掲しない）。
-> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-24（批判的監査の是正 PR #20〜#24 を反映）。
+> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-24（批判的監査の是正 PR #20〜#32＝
+> P0 T1/T2・P0-2 タグ機械検証・P1 安全装置一式・P2 firewall を反映）。
 
 ---
 
@@ -203,7 +204,7 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
     書き換えない・降格しない）。共有純関数 `analyze_compare.variation_verdict` を CLI と PDF で共有。
   - **P2 衛生（PR #24）**：README テスト数ドリフト是正・SPEC §7 に再現性の限界（LLM層はビット非再現
     ＝分布再現のみ）昇格・`main.py`/`visualization.py` を LEGACY 明記・`.gitignore` に metacog/logs*。
-- **LLM非依存テスト**：**644 checks passed**（16ファイル・実測 2026-07-24）。決定論部分
+- **LLM非依存テスト**：**651 checks passed**（16ファイル・実測 2026-07-24。配信 firewall 検証を含む）。決定論部分
   （world / responsibility / service_flow / governance / 内生規則 / 計測 / 再現性 / タグ機械検証）を厚くカバー。
   加えて **E2E スモーク（`test_pipeline_smoke.py`・PR #26/P1-A）**＝Ollama モックで実 `Simulation.run()` を
   2 step 回し sim→analyze→report(HTML)→resp_frame(HTML) の**結合**を検証（Chromium/ffmpeg 不要・~0.5s）、
@@ -237,9 +238,11 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
      - **P1（本走行前の安全装置）＝完了**：✅ E2E スモークテスト（`test_pipeline_smoke.py`・PR #26）／
        ✅ Ollama 失敗のリトライ・失敗計測（`ollama_client.py`＋run_meta.llm・PR #28）／
        ✅ チェックポイント・再開（`--resume`・毎step `checkpoint.json`＝~8h 走行の途中クラッシュ全損回避・PR #30）。
-     - **残る P2**：クロスモデル追試（llama3.1/gemma2 で T1 修正後の cheap_talk/grant 所見が再現するか＝
-       qwen の RLHF 癖 vs 傾向の候補の弁別・`value_provenance §4.22`）／PNG アセットの Git LFS 化／
-       firewall（責任トラックと情景/意識トラックの**配信形態での物理分離**・約束8）。
+     - **P2**：✅ firewall（責任トラックと情景/意識トラックの**配信形態での物理分離**・
+       `resp_frame.delivery_bundles()`・約束8・PR #32）。**保留**：PNG アセットの Git LFS 化（＝履歴書き換え＋
+       force-push が破壊的・env に git-lfs 未導入・22MB は静的で放置コスト小。将来やるなら明示承認つき単発）。
+       **実行系（本走行フェーズ）**：クロスモデル追試（llama3.1/gemma2 で T1 修正後の cheap_talk/grant 所見が
+       再現するか＝qwen の RLHF 癖 vs 傾向の候補の弁別・`value_provenance §4.22`）・F1/F2 の fact_only 再測定。
      - 追跡中の `metacog/logs_no_intro/`（v1 アーカイブ）の掃除要否は要判断（PR #24 では温存）。
 - **提出スコープ**：**`--no-introspect` 単層のみ**。内省層あり（L1）は将来の A/B 比較用に温存（`metacog/` は残置）。
 
