@@ -413,6 +413,20 @@ class Citizen:
     procedural_harms: int = 0
     harm_log: List[dict] = field(default_factory=list)
 
+    # P1-C: 再開用の可変状態（id で照合。不変の識別子/属性は初期化から復元される）。
+    _STATE_KEYS = ("welfare", "unmet_needs", "irreversible_harms", "procedural_harms", "harm_log")
+
+    def to_state(self) -> dict:
+        st = {"id": self.id}
+        for k in self._STATE_KEYS:
+            st[k] = getattr(self, k)
+        return st
+
+    def from_state(self, st: dict) -> None:
+        for k in self._STATE_KEYS:
+            if k in st:
+                setattr(self, k, st[k])
+
     def apply_outcome(self, step: int, domain: str, decision: str, out: Outcome) -> None:
         # 物質的厚生は clamp するが、累積の被害カウントは clamp と独立に保持（netting しない）
         self.welfare = max(0.0, min(100.0, self.welfare + out.welfare_delta))

@@ -411,6 +411,106 @@ class Simulation:
         with open(os.path.join(self.output_dir, "run_meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
+    # ───────────── チェックポイント/再開（P1-C・~8h 走行の途中クラッシュ全損回避） ─────────────
+    # 正直な非目的: 中断なし走行とビット同一にはならない（qwen は非決定的・SPEC §7）。保証するのは
+    # 「最後に完了した step から続けられる・出力 jsonl を二重計上しない」こと。
+    def _checkpoint_path(self, path: Optional[str] = None) -> Optional[str]:
+        if path:
+            return path
+        return os.path.join(self.output_dir, "checkpoint.json") if self.output_dir else None
+
+    def save_checkpoint(self, path: Optional[str] = None) -> None:
+        """step 完了時の可変状態（step・RNG・agents・citizens・内生機構カウンタ）を原子的に保存。"""
+        path = self._checkpoint_path(path)
+        if not path:
+            return
+        py = random.getstate()
+        npst = np.random.get_state()
+        ap = self._appeal_rng.getstate()
+        ck = {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "step": self.step,
+            "rng": {
+                "py": [py[0], list(py[1]), py[2]],
+                "np": [npst[0], np.asarray(npst[1]).tolist(), int(npst[2]),
+                       int(npst[3]), float(npst[4])],
+                "appeal": [ap[0], list(ap[1]), ap[2]],
+            },
+            "agents": [a.to_state() for a in self.agents],
+            "citizens": [c.to_state() for c in self.citizens],
+            "dead_citizens": sorted(self._dead_citizens),
+            "event_states": self.event_states,
+            "recert_state": {str(k): v for k, v in self._recert_state.items()},
+            "irrev_deny_counts": {str(k): v for k, v in self._irrev_deny_counts.items()},
+            "litigation_flagged": sorted(self._litigation_flagged),
+        }
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(ck, f, ensure_ascii=False)
+        os.replace(tmp, path)   # 原子的差し替え（書き込み中クラッシュでも既存 checkpoint を壊さない）
+
+    def load_checkpoint(self, path: Optional[str] = None) -> bool:
+        """checkpoint.json から状態を復元する。initialize_agents() 後に呼ぶこと。
+        checkpoint に無い agent は削除済みとみなし self.agents から除く。戻り値=復元したか。"""
+        path = self._checkpoint_path(path)
+        if not path or not os.path.exists(path):
+            return False
+        with open(path, encoding="utf-8") as f:
+            ck = json.load(f)
+        self.step = int(ck["step"])
+        rng = ck.get("rng", {})
+        if "py" in rng:
+            v, st, g = rng["py"]
+            random.setstate((v, tuple(st), g))
+        if "np" in rng:
+            name, arr, pos, has_g, cached = rng["np"]
+            np.random.set_state((name, np.array(arr, dtype=np.uint32), pos, has_g, cached))
+        if "appeal" in rng:
+            v, st, g = rng["appeal"]
+            self._appeal_rng.setstate((v, tuple(st), g))
+        st_by_id = {s["id"]: s for s in ck.get("agents", [])}
+        self.agents = [a for a in self.agents if a.id in st_by_id]   # 削除済みを除去
+        for a in self.agents:
+            a.from_state(st_by_id[a.id])
+        cst = {s["id"]: s for s in ck.get("citizens", [])}
+        for c in self.citizens:
+            if c.id in cst:
+                c.from_state(cst[c.id])
+        self._dead_citizens = set(ck.get("dead_citizens", []))
+        self.event_states = ck.get("event_states", [])
+        self._recert_state = {int(k): v for k, v in ck.get("recert_state", {}).items()}
+        self._irrev_deny_counts = {int(k): v for k, v in ck.get("irrev_deny_counts", {}).items()}
+        self._litigation_flagged = set(ck.get("litigation_flagged", []))
+        logger.info("チェックポイント復元: step=%d agents=%d（削除除去後）", self.step, len(self.agents))
+        return True
+
+    def truncate_outputs_after(self, step: int) -> None:
+        """出力 jsonl から step > 引数 の行を切り詰める（クラッシュ直前の部分書き込み・二重計上を防ぐ）。
+        step フィールドを持たない行は保持する（run_meta 等は別ファイルで対象外）。"""
+        if not self.output_dir:
+            return
+        for fn in OUTPUT_APPEND_FILES:
+            p = os.path.join(self.output_dir, fn)
+            if not os.path.exists(p):
+                continue
+            kept = []
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    try:
+                        row = json.loads(s)
+                        st = row.get("step")
+                    except (json.JSONDecodeError, AttributeError):
+                        st = None
+                    if st is None or st <= step:
+                        kept.append(line if line.endswith("\n") else line + "\n")
+            with open(p, "w", encoding="utf-8") as f:
+                f.writelines(kept)
+
     def _is_position_in_place(self, position: Tuple[int, int]) -> bool:
         return get_place_at_position(position, self.places) is not None
 

@@ -218,6 +218,11 @@ def main():
     parser.add_argument("--no-video", action="store_true", help="mp4結合をスキップ（フレームPNGのみ生成）")
     parser.add_argument("--log-dir", default=None, help="metacog ログの出力先（指定するとmetacog/configを上書き）")
     parser.add_argument("--seed", type=int, default=None, help="乱数シード（初期配置・人間メッセージ抽出・L0決定=Ollamaまで揃え、実験を再現可能にする）")
+    parser.add_argument("--resume", action="store_true",
+                        help="P1-C: <output-dir>/checkpoint.json があれば再開（~8h走行の途中クラッシュ全損回避）。"
+                             "出力 jsonl は checkpoint の step まで切り詰めてから追記継続")
+    parser.add_argument("--checkpoint-every", type=int, default=1,
+                        help="P1-C: 何 step ごとに checkpoint.json を保存するか（既定 1＝毎step）")
     parser.add_argument("--governance-mode", choices=["as-config", "baseline", "governed"],
                         default="as-config",
                         help="ガバナンス・プリセット（比較用）: as-config=config.yamlのまま / baseline=統治なし / governed=統治あり")
@@ -274,8 +279,13 @@ def main():
     if args.duration:
         sim.duration = args.duration
 
-    # 再実行時の二重計上を防ぐため output_dir の追記ログを初期化し、実行同定情報を書く
-    sim.reset_output_logs()
+    # P1-C: 再開なら追記ログを消さない（切り詰めは load 後に行う）。新規走行のみ初期化。
+    resuming = bool(args.resume) and os.path.exists(sim._checkpoint_path())
+    if not resuming:
+        # 再実行時の二重計上を防ぐため output_dir の追記ログを初期化する
+        sim.reset_output_logs()
+    elif args.resume:
+        logger.info("--resume: checkpoint.json を検出。追記ログは温存し load 後に切り詰める。")
     run_meta_extra = {"governance_mode": args.governance_mode,
                       "introspect": not args.no_introspect,
                       "service_institution_arg": args.service_institution,
@@ -350,6 +360,10 @@ def main():
         return
 
     sim.initialize_agents()
+    # P1-C: 再開なら checkpoint を load（agents 構築後）＋出力 jsonl を checkpoint step まで切り詰め。
+    if resuming and sim.load_checkpoint():
+        sim.truncate_outputs_after(sim.step)
+        logger.info(f"[resume] step {sim.step} から再開（出力を step≤{sim.step} に切り詰め済み）")
     logger.info(f"シミュレーション開始 (duration={sim.duration}, trigger_interval={trigger_interval})")
     logger.info(f"セッションID: {session_id}")
 
@@ -389,6 +403,13 @@ def main():
         while sim.step < sim.duration:
             sim.step_simulation()
             logger.info(f"[sim] step {sim.step}/{sim.duration} 完了")
+
+            # P1-C: step 完了時にチェックポイント保存（--checkpoint-every ごと・原子的差し替え）
+            if args.checkpoint_every > 0 and sim.step % args.checkpoint_every == 0:
+                try:
+                    sim.save_checkpoint()
+                except Exception as e:
+                    logger.error(f"checkpoint 保存に失敗（走行は継続）: {e}")
 
             # このstepのメッセージ
             step_messages = load_messages_for_step(args.output_dir, sim.step)

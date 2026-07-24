@@ -222,6 +222,33 @@ class Agent:
         self.steps_outside_place = 0
         self.total_moves = 0
 
+    # ───────────── チェックポイント（P1-C・再開用の可変状態のみ） ─────────────
+    # 走行中に変化し将来の step に効く状態を明示列挙する（config 由来の不変値・llm_client 等は除く）。
+    _STATE_KEYS = (
+        "position", "self_concept", "current_goal", "coping_notes",
+        "in_place", "current_place", "memory", "received_messages", "evicted_memories",
+        "last_self_update_audit", "event_queue", "last_introspection_step",
+        "introspection_count", "last_modified_cycle", "rewrite_counts", "prev_self_state",
+        "steps_in_place", "steps_outside_place", "total_moves",
+    )
+
+    def to_state(self) -> Dict[str, Any]:
+        """再開用の可変状態を JSON 化可能な dict で返す（id つき）。set は list 化。"""
+        st = {"id": self.id}
+        for k in self._STATE_KEYS:
+            st[k] = getattr(self, k)
+        st["position"] = list(self.position)                       # tuple→list
+        st["answered_human_keys"] = sorted(self.answered_human_keys)  # set→list
+        return st
+
+    def from_state(self, st: Dict[str, Any]) -> None:
+        """to_state() の dict から可変状態を復元する（config 由来の不変値は触らない）。"""
+        for k in self._STATE_KEYS:
+            if k in st:
+                setattr(self, k, st[k])
+        self.position = tuple(st["position"]) if "position" in st else self.position
+        self.answered_human_keys = set(st.get("answered_human_keys", []))
+
     # ───────────── 位置/通信 ─────────────
 
     def is_in_place(self, position: Tuple[int, int]) -> bool:
