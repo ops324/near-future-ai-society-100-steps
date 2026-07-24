@@ -112,9 +112,33 @@ def test_repro_and_font():
         check("None は空文字", R.font_face_from_path(None) == "")
 
 
+def test_machine_check_flat_emergent():
+    """P0-2: PDF 側も CLI と同一の ac.variation_verdict を再利用し、[E]だが本比較で不変な指標に
+    中立マーカー(·不変)を付ける（タグは書き換えない・降格しない）。"""
+    import analyze_compare as ac
+    with tempfile.TemporaryDirectory() as t:
+        arms = R.load_arms(_arms(t))   # 両アーム同一 ledger → 判断系[E]は同値=flat
+    flat = R.flat_emergent_rows(arms)
+    check("flat_emergent に cheap_talk（両アーム同値）", any("cheap_talk" in l for l in flat))
+    check("flat_emergent は [E] のみ（降格・誤爆なし）", all(l.startswith("[E]") for l in flat))
+    tbl = R.build_metric_table(arms)
+    check("表に中立マーカー ·不変", "·不変" in tbl)
+    check("report は CLI と同じ純関数を再利用", ac.variation_verdict({"a": 50.0, "b": 50.0}) == "flat")
+
+
+def test_machine_check_note_in_html():
+    """build_html に機械検証の要約と reconciled_real の T1 個別脚注が入る。"""
+    with tempfile.TemporaryDirectory() as t:
+        htm = R.build_html(arm_specs=_arms(t))
+    check("HTML に機械検証の見出し", "機械検証" in htm)
+    check("HTML に T1 個別脚注（構造的に0）", "構造的に0" in htm)
+    check("HTML に scope 注記（[S]/[D]は別途）", "tautology-audit" in htm)
+
+
 if __name__ == "__main__":
     for fn in [test_load_arms, test_fmt_metric, test_svg_and_table,
-               test_build_html, test_repro_and_font]:
+               test_build_html, test_repro_and_font,
+               test_machine_check_flat_emergent, test_machine_check_note_in_html]:
         fn()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)

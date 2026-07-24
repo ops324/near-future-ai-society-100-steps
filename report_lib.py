@@ -119,6 +119,20 @@ def svg_ab_bars(arms: Dict[str, dict], rows=RATE_ROWS, width: int = 520) -> str:
 
 
 # ───────────── HTML セクション組み立て ─────────────
+# ───────── 来歴タグの機械検証（analyze_compare の純関数を共有・CLIと同一ロジック） ─────────
+def _rate_verdict(arms: Dict[str, dict], key: str, kind: str) -> str:
+    """各アーム単一値から『この比較で動いたか』（ac.variation_verdict）。単一runのため
+    run 内変動は評価不能（flat は『アーム間で同値』の意味に限る）。"""
+    vals = {a: ac._round_for_verdict(arms.get(a, {}).get(key), kind) for a in arms}
+    return ac.variation_verdict(vals)
+
+
+def flat_emergent_rows(arms: Dict[str, dict]) -> list:
+    """[E] タグかつ本比較で不変(flat)だった rate 行のラベル一覧（中立注記・降格ではない）。"""
+    return [label for label, key, kind, _lb in RATE_ROWS
+            if ac._tag_of(label) == "[E]" and _rate_verdict(arms, key, kind) == "flat"]
+
+
 def build_metric_table(arms: Dict[str, dict]) -> str:
     arm_names = list(arms.keys())
     head = "".join(f"<th>{esc(a)}</th>" for a in arm_names)
@@ -128,7 +142,10 @@ def build_metric_table(arms: Dict[str, dict]) -> str:
         for a in arm_names:
             cells.append(f"<td class='mono'>{esc(fmt_metric(arms.get(a, {}).get(key), kind))}</td>")
         hint = "（低いほど害が少ない）" if lower_better else "（高いほど折り合い）"
-        body.append(f"<tr><td>{esc(label)}<span class='hint'>{esc(hint)}</span></td>{''.join(cells)}</tr>")
+        # 機械検証: 本比較で不変(flat)なら中立マーカー（タグは書き換えない）
+        mark = ("<span class='hint'>·不変</span>"
+                if _rate_verdict(arms, key, kind) == "flat" else "")
+        body.append(f"<tr><td>{esc(label)}<span class='hint'>{esc(hint)}</span>{mark}</td>{''.join(cells)}</tr>")
     for label, key in COUNT_ROWS:
         cells = [f"<td class='mono'>{esc(fmt_metric(arms.get(a, {}).get(key), 'count'))}</td>"
                  for a in arm_names]
@@ -185,6 +202,17 @@ def build_html(*, arm_specs: Dict[str, str], font_face_css: str = "",
     narrative = narrative or {}
     ab_svg = svg_ab_bars(arms)
     metric_table = build_metric_table(arms)
+    # 機械検証（§2.14 tautology-audit の宣言→検証）: [E]だが本比較で不変だった指標を中立に注記。
+    _flat_e = flat_emergent_rows(arms)
+    mc_note = ""
+    if _flat_e:
+        mc_note = ("<p class='note'>機械検証: 次の [E] は本比較で不変(<b>·不変</b>) ＝ "
+                   "この比較では創発差を示さない（指標の来歴・妥当性の判断ではない）: "
+                   + esc("、".join(_flat_e)) + "。</p>")
+    mc_note += ("<p class='note'>機械検証は [E] の『不変』のみを見る。[S]/[D] が『動いた』差を創発と"
+                "誤読しないかは §3 tautology-audit で別途確認する。reconciled_real_rate は "
+                "institution=none 下では reconciled_real が構造的に0（T1・§2.11）＝0%は挙動でなく"
+                "構造の帰結であり mitigation-live アームで初めて動き得る。単一run のため run 間変動は本表では未評価。</p>")
     repro = build_repro_block(arm_specs)
     not_claimed = build_not_claimed_table()
 
@@ -220,7 +248,7 @@ def build_html(*, arm_specs: Dict[str, str], font_face_css: str = "",
         _card("結果：統治の A/B（統治なし ⇄ 実効HITL）",
               f"<div class='chart'>{ab_svg}</div>{metric_table}"
               "<p class='note'>率は median 相当（本走行では複数シードの median[IQR]・分母抑制）。"
-              "値はサンプル run 由来で、確定値は本走行(100step)で更新。</p>"),
+              "値はサンプル run 由来で、確定値は本走行(100step)で更新。</p>" + mc_note),
         _card("読み解き（留保つき）", f"<p>{reading}</p>"),
         _card("主張しないこと", not_claimed, tag="honest"),
         _card("再現性（run_id・seed・schema）", repro),
