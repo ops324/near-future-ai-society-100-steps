@@ -203,10 +203,11 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
     書き換えない・降格しない）。共有純関数 `analyze_compare.variation_verdict` を CLI と PDF で共有。
   - **P2 衛生（PR #24）**：README テスト数ドリフト是正・SPEC §7 に再現性の限界（LLM層はビット非再現
     ＝分布再現のみ）昇格・`main.py`/`visualization.py` を LEGACY 明記・`.gitignore` に metacog/logs*。
-- **LLM非依存テスト**：**614 checks passed**（14ファイル・実測 2026-07-24）。決定論部分
+- **LLM非依存テスト**：**628 checks passed**（15ファイル・実測 2026-07-24）。決定論部分
   （world / responsibility / service_flow / governance / 内生規則 / 計測 / 再現性 / タグ機械検証）を厚くカバー。
   加えて **E2E スモーク（`test_pipeline_smoke.py`・PR #26/P1-A）**＝Ollama モックで実 `Simulation.run()` を
-  2 step 回し sim→analyze→report(HTML)→resp_frame(HTML) の**結合**を検証（Chromium/ffmpeg 不要・~0.5s）。
+  2 step 回し sim→analyze→report(HTML)→resp_frame(HTML) の**結合**を検証（Chromium/ffmpeg 不要・~0.5s）、
+  **Ollama リトライ（`test_ollama_client.py`・PR #28/P1-B）**＝失敗の指数バックオフ再試行・失敗計測を検証。
   数はスイート増加で変動するため、確定値は各 `test_*.py` の `RESULT` 行を実行合算して都度確認する
   （固定数を正典化しない）。
 - **残務**：
@@ -233,9 +234,8 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
      行動化済み）・self-mod/personhood_shield の live 検出）。
   3. **監査由来の残り（本走行の前後）**：
      - **P1（本走行前の安全装置・推奨先行）**：✅ E2E スモークテスト（`test_pipeline_smoke.py`・
-       PR #26 マージ済＝Ollama モックで結合を1本通す）。**残**：チェックポイント・再開（~8h 走行の
-       途中クラッシュ全損回避）／Ollama 失敗のリトライ・可視化（`ollama_client.py` の空文字 return に
-       よるサイレント劣化の是正）。
+       PR #26）／✅ Ollama 失敗のリトライ・失敗計測（`ollama_client.py`＋run_meta.llm・PR #28＝
+       サイレント劣化の是正）。**残**：チェックポイント・再開（~8h 走行の途中クラッシュ全損回避）。
      - **残る P2**：クロスモデル追試（llama3.1/gemma2 で T1 修正後の cheap_talk/grant 所見が再現するか＝
        qwen の RLHF 癖 vs 傾向の候補の弁別・`value_provenance §4.22`）／PNG アセットの Git LFS 化／
        firewall（責任トラックと情景/意識トラックの**配信形態での物理分離**・約束8）。
