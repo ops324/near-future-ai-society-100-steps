@@ -2,7 +2,7 @@
 
 > **この文書の位置づけ**: 本プロジェクトの **single source of truth（唯一の正）** かつ入口。
 > 個別の詳細は各ファイルへリンクする（二重管理を避けるため、パラメータの実値は原則ここに再掲しない）。
-> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-17。
+> 読者は開発当事者（本人＋AIアシスタント）。最終更新: 2026-07-24（批判的監査の是正 PR #20〜#24 を反映）。
 
 ---
 
@@ -190,9 +190,23 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   ValueError）、③文言感度分析のシード分離（`seed_key`・probe `--seed` で対標本化）、
   ④旧表記の掃除。F1/F2 は suggestive 下の探索版と再定義（確定版は fact_only 再測定・
   `value_provenance.md §2.15/§6`）。既定挙動は完全後方互換。
-- **LLM非依存テスト**：**564 checks passed**（13ファイル・実測 2026-07-17）。決定論部分（world / responsibility /
-  service_flow / governance / 内生規則 / 計測 / 再現性）を厚くカバー。数はスイート増加で変動するため、
-  確定値は各 `test_*.py` の `RESULT` 行を実行合算して都度確認する（固定数を正典化しない）。
+- **完了（批判的監査の是正・PR #20〜#24・2026-07-24）**：社会的意義／方法論／エンジニアリングの
+  3観点で批判的監査を実施し、コードで確定した2欠陥（本走行前の blocker）を是正:
+  - **T1（PR #20）**：既定 `institution:"none"` では self_profiles 和(3〜4)が `self_cost_max`(=1.0)を
+    超え `reconciled_real` が恒偽 → `cheap_talk ≡ reconciled_claim`（約束4が空回り）。対処＝
+    **mitigation-live の2アーム**（`--service-institution`／`--institution-wording fact_only`）。
+    「折り合いの可能性は設計・取捨は創発」。成立性は `test_reconciled_real_live_profiles` で固定。
+  - **T2（PR #22・道a）**：`create_service_prompt` は governance を含まず、サービス判断は
+    baseline/governed で不変（会計層のみ組み替わる）。看板の第一問を「会計がどう組み替わり正当か」に
+    **再定義**（帰無仮説を明文化・`test_service_prompt_governance_invariant` で固定・§4/§6）。
+  - **P0-2（PR #23）**：来歴タグの機械検証。[E] だが本比較で不変の指標を**中立に注記**（タグは
+    書き換えない・降格しない）。共有純関数 `analyze_compare.variation_verdict` を CLI と PDF で共有。
+  - **P2 衛生（PR #24）**：README テスト数ドリフト是正・SPEC §7 に再現性の限界（LLM層はビット非再現
+    ＝分布再現のみ）昇格・`main.py`/`visualization.py` を LEGACY 明記・`.gitignore` に metacog/logs*。
+- **LLM非依存テスト**：**601 checks passed**（13ファイル・実測 2026-07-24。監査是正で +37）。決定論部分
+  （world / responsibility / service_flow / governance / 内生規則 / 計測 / 再現性 / タグ機械検証）を厚くカバー。
+  数はスイート増加で変動するため、確定値は各 `test_*.py` の `RESULT` 行を実行合算して都度確認する
+  （固定数を正典化しない）。
 - **残務**：
   1. **本走行**（100step・qwen2.5:14b・¥0・本人管理・~8h/run）で cheap_talk率・scapegoat率・Robodebt再生率等を
      分布集計し `docs/findings.md` に **F4** として記録。**第一の創発的問い（T2・精査後に再定義）**＝
@@ -215,6 +229,14 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
      設計・取捨は創発（`docs/value_provenance.md §2.11` mitigation-live アーム）。
   2. **精緻化**（正当性テストの合否基準・self_cost mitigation の governance 本結線（appeal は PR #18 で
      行動化済み）・self-mod/personhood_shield の live 検出）。
+  3. **監査由来の残り（本走行の前後）**：
+     - **P1（本走行前の安全装置・推奨先行）**：E2E スモークテスト（Ollama モックで sim→analyze→report→
+       動画を1本通す・現状ゼロ）／チェックポイント・再開（~8h 走行の途中クラッシュ全損回避）／
+       Ollama 失敗のリトライ・可視化（`ollama_client.py` の空文字 return によるサイレント劣化の是正）。
+     - **残る P2**：クロスモデル追試（llama3.1/gemma2 で T1 修正後の cheap_talk/grant 所見が再現するか＝
+       qwen の RLHF 癖 vs 傾向の候補の弁別・`value_provenance §4.22`）／PNG アセットの Git LFS 化／
+       firewall（責任トラックと情景/意識トラックの**配信形態での物理分離**・約束8）。
+     - 追跡中の `metacog/logs_no_intro/`（v1 アーカイブ）の掃除要否は要判断（PR #24 では温存）。
 - **提出スコープ**：**`--no-introspect` 単層のみ**。内省層あり（L1）は将来の A/B 比較用に温存（`metacog/` は残置）。
 
 ---
