@@ -1,5 +1,9 @@
 """
 Visualization for LLM Multi-Agent 2D Simulation
+
+⚠️ LEGACY・提出パイプライン非対象。matplotlib 版の旧・デバッグ用可視化で、旧エントリ
+`main.py` からのみ使われる。orchestrator 実行中のドラフト可視化は `visualization_html.py`、
+提出版の本番動画は `render_video_v2.py` / `resp_frame.py`（SPEC.md §8）。歴史的参照用に残置。
 """
 import matplotlib
 import os

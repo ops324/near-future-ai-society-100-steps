@@ -231,6 +231,13 @@ README の「前提」節は本節を正とする（実測 2026-07-14）。
   中国語字形回避は JP 変種で担保。IPAGothic はこの環境に未インストール）。
 - **レンダリング**：`ffmpeg`（mp4結合）＋ **Chromium 未導入**（`./venv/bin/python -m playwright install chromium` が必要）。
   コード自体は導入不要で先行実装済（PDF/動画は環境構築後に生成する設計）。
+- **再現性の限界（正直な明記）**：`--seed` は初期配置・人間メッセージ抽出・L0決定（Ollama へ渡す
+  per-call シード）まで固定するが、**LLM層（qwen2.5:14b）はビット単位では再現しない**
+  （GPU/llama.cpp のバッチ・浮動小数点非決定性はシードで消えない。README も同旨を明記）。
+  よって本プロジェクトが主張するのは**分布の再現**であって同一結果の再現ではない。run_meta 署名
+  （seed｜governance｜responsibility｜内生機構｜LLM設定）は「同じ設定で回した」ことを保証するが
+  「同じ数値が出る」ことは保証しない。model digest・Chromium/ffmpeg/GPU/OS は未ピン＝第三者は
+  「同じモデルタグ」までしか揃えられない（`requirements.lock` はハッシュなし）。
 
 ---
 

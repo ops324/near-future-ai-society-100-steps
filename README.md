@@ -42,7 +42,7 @@ near-future-ai-society-100-steps/
 ├── docs/
 │   ├── value_provenance.md    ← パラメータ台帳（最新・最詳細）
 │   └── findings.md            ← 所見ログ F0–F3
-├── test_*.py                  ← LLM非依存テスト（10ファイル）
+├── test_*.py                  ← LLM非依存テスト（13ファイル。数はスイート増で変動＝確定値は各 test_*.py の RESULT 行を合算。SPEC §6）
 ├── requirements.txt, requirements.lock
 └── output_<mode>/             ← 実行時生成（.gitignore）
 ```
