@@ -297,6 +297,77 @@ def _fmt_cell(key, kind, denom_key, runs):
         return f"{d['median']:>5.0f}"
 
 
+# ───────── 来歴タグの機械検証（§2.14 tautology-audit の宣言→検証） ─────────
+# 目的: 手書きの [E] タグが「その比較で実際に動いたか」を機械的に注記する。
+# 重要: これは指標の"出自"（[E]=LLM挙動由来 / [D]=定義的）の判定ではなく、
+#       "この比較でアーム差が出たか"という別カテゴリの事実の注記。タグは書き換えない。
+def _tag_of(label):
+    """ラベル先頭の来歴タグ '[X]' を返す（無ければ ''）。未知タグ・先頭空白に頑健。"""
+    s = str(label).lstrip()
+    if s.startswith("[") and "]" in s:
+        return s[:s.index("]") + 1]
+    return ""
+
+
+def _round_for_verdict(value, kind):
+    """verdict 判定を『表示と同じ丸め』に揃える（rate=小数1桁%, count=整数）。
+    生値の微差による偽陽性/偽陰性を除き、表と判定を一致させる。"""
+    if value is None:
+        return None
+    if kind == "rate":
+        return round(float(value) * 100, 1)   # 表示は {median*100:.1f}%
+    return round(float(value))                # count は整数表示
+
+
+def _arm_display_value(key, kind, denom_key, runs):
+    """1アームの『表示に使う中央値』を verdict 用の丸めで返す（分母抑制時は None）。
+    _fmt_cell と同じ抑制条件（分母中央値 < DENOM_MIN）を適用して表と整合させる。"""
+    d = _dist([r.get(key) for r in runs])
+    if d is None:
+        return None
+    if kind == "rate" and denom_key is not None:
+        if median([r.get(denom_key, 0) for r in runs]) < DENOM_MIN:
+            return None
+    return _round_for_verdict(d["median"], kind)
+
+
+def _arm_interval(key, kind, denom_key, runs):
+    """1アームの (q1, q3, n)（生値）。run 内変動の確認用。抑制/空なら None。"""
+    d = _dist([r.get(key) for r in runs])
+    if d is None:
+        return None
+    if kind == "rate" and denom_key is not None:
+        if median([r.get(denom_key, 0) for r in runs]) < DENOM_MIN:
+            return None
+    return (d["q1"], d["q3"], d["n"])
+
+
+def _intervals_share_overlap(intervals):
+    """全区間が共通の重なりを持つか（max(q1) <= min(q3)）。1つでも None なら判定不能=False扱い。"""
+    ivs = [i for i in intervals if i is not None]
+    if len(ivs) < 2:
+        return True   # 比較対象が1つ以下なら run 内変動の相互矛盾は起きない
+    return max(i[0] for i in ivs) <= min(i[1] for i in ivs)
+
+
+def variation_verdict(values_by_arm):
+    """アーム→表示丸め後の値(or None) から『この比較で動いたか』を返す純関数。
+    タグ体系（[E]/[D]=指標の出自）とは別カテゴリ。degenerate(0/1境界)特別扱いはしない
+    （AIR=1.0＝無差別のような実所見を潰さないため）。
+      全 None -> 'suppressed' / 一部 None -> 'incomparable'（例外を出さない）
+      値ありアーム<2 -> 'single' / 全値一致 -> 'flat' / それ以外 -> 'varied'
+    """
+    vals = list(values_by_arm.values())
+    present = [v for v in vals if v is not None]
+    if not present:
+        return "suppressed"
+    if len(present) < len(vals):
+        return "incomparable"
+    if len(present) < 2:
+        return "single"
+    return "flat" if all(v == present[0] for v in present) else "varied"
+
+
 def expand_spec(spec):
     """'label=glob' or 'dir' を (label, [existing dirs]) に展開。"""
     if "=" in spec:
@@ -327,13 +398,39 @@ def main():
         f"| {label[:col_w]:>{col_w}} " for (label, _) in arms)
     print(header)
     print("-" * len(header))
+    flat_emergent = []   # [E] だが本比較で不変だった指標（機械検証の警告対象）
     for row_label, key, kind, denom_key in ROWS:
-        line = row_label.ljust(label_w)
+        # 機械検証: 各アームの表示値から verdict（タグは書き換えない・中立注記のみ）
+        vals_by_arm = {label: _arm_display_value(key, kind, denom_key, arm_runs[label])
+                       for (label, _) in arms}
+        verdict = variation_verdict(vals_by_arm)
+        note = ""
+        if verdict == "flat":
+            # multi-run 時は各アームの [q1,q3] も収束している時のみ「不変」を確定
+            intervals = [_arm_interval(key, kind, denom_key, arm_runs[label])
+                         for (label, _) in arms]
+            if _intervals_share_overlap(intervals):
+                note = " ·不変"
+                if _tag_of(row_label) == "[E]":
+                    flat_emergent.append(row_label)
+            else:
+                note = " ·中央値不変(但run内変動)"
+        line = (row_label + note).ljust(label_w)
         for (label, _) in arms:
             cell = _fmt_cell(key, kind, denom_key, arm_runs[label])
             line += f"| {cell:>{col_w}} "
         print(line)
     print()
+    # 機械検証の要約（§2.14 tautology-audit の宣言→検証）。scope を正直に囲う。
+    if flat_emergent:
+        print("※ 機械検証: 以下の [E] 指標は本比較の中央値・四分位で不変(Δ≈0) ＝ "
+              "この比較では創発差を示さない（指標の来歴・妥当性の判断ではない）:")
+        for lbl in flat_emergent:
+            print(f"     - {lbl}")
+    print("※ 機械検証は [E] の『不変』のみを見る。[S]/[D] が『動いた』差を創発と誤読しないかは"
+          "別途 tautology-audit（各主張の観測条件・§3）で確認する。")
+    print("※ reconciled_real_rate: institution=none 下では reconciled_real は構造的に0（T1・§2.11）。"
+          "0%は挙動でなく構造の帰結であり、mitigation-live アーム（--service-institution）で初めて動き得る。")
     # 各アームの run 本数を明示
     for (label, dirs) in arms:
         print(f"  {label}: {len(dirs)} run(s)")

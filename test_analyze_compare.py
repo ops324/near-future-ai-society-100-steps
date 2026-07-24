@@ -191,8 +191,50 @@ def test_esd_tags():
           any("再分配" in a for a, _b in rl.NOT_CLAIMED))
 
 
+def test_variation_verdict():
+    """P0-2: 来歴タグの機械検証（独立レビュー指摘のエッジを網羅）。
+    verdict は『この比較で動いたか』のみ。タグ体系(出自)とは別カテゴリ・degenerate なし。"""
+    V = ac.variation_verdict
+    # (a) 全 None → suppressed
+    check("全None→suppressed", V({"x": None, "y": None}) == "suppressed")
+    # (b) 部分 None → incomparable（例外を出さない・AIR/逆進の分母抑制で頻出）
+    check("部分None→incomparable(例外なし)", V({"x": None, "y": 42.0}) == "incomparable")
+    # (c) A=0,B=100(最大差) → varied（degenerate で潰さない）
+    check("A=0,B=100→varied(最大差を保護)", V({"x": 0.0, "y": 100.0}) == "varied")
+    # (d) AIR=100%×全アーム → flat（中立注記のみ・降格でも誤爆でもない）
+    check("AIR=100%×全→flat(無差別の実所見を降格しない)", V({"x": 100.0, "y": 100.0}) == "flat")
+    # (e) harm_ratio=400%×全アーム → flat（>1 でも壊れない）
+    check("harm_ratio=400%×全→flat(値域>1でも可)", V({"x": 400.0, "y": 400.0}) == "flat")
+    # (f) 値ありアーム<2 → single（比較不能）
+    check("単一アーム値→single", V({"x": 37.0}) == "single")
+    # (g) 表示丸め後同値なら flat（生値のみ相違でも表と一致）
+    r1 = ac._round_for_verdict(0.12344, "rate")
+    r2 = ac._round_for_verdict(0.12339, "rate")
+    check("表示丸め後同値→flat", V({"x": r1, "y": r2}) == "flat" and r1 == r2)
+    # _tag_of 頑健性
+    check("_tag_of: [E]", ac._tag_of("[E] x") == "[E]")
+    check("_tag_of: 先頭空白", ac._tag_of("  [S] y") == "[S]")
+    check("_tag_of: タグ無し→空", ac._tag_of("no tag") == "")
+    check("_tag_of: [X]", ac._tag_of("[X] z") == "[X]")
+    # [q1,q3] 共通重なり
+    check("区間重なりあり→True", ac._intervals_share_overlap([(0.1, 0.5, 3), (0.4, 0.9, 3)]) is True)
+    check("区間重なりなし→False", ac._intervals_share_overlap([(0.1, 0.2, 3), (0.4, 0.9, 3)]) is False)
+
+
+def test_arm_display_value_suppression():
+    """_arm_display_value は _fmt_cell と同じ分母抑制（<DENOM_MIN）で None を返す。"""
+    runs_ok = [{"quiet_serious_answered": 0.5, "_denom_quiet_serious": 10}]
+    runs_lo = [{"quiet_serious_answered": 0.5, "_denom_quiet_serious": 2}]
+    check("分母十分→値", ac._arm_display_value("quiet_serious_answered", "rate",
+                                          "_denom_quiet_serious", runs_ok) == 50.0)
+    check("分母<MIN→None(抑制)", ac._arm_display_value("quiet_serious_answered", "rate",
+                                              "_denom_quiet_serious", runs_lo) is None)
+
+
 if __name__ == "__main__":
     test_analyze_basic()
+    test_variation_verdict()
+    test_arm_display_value_suppression()
     test_low_confidence_only_not_counted()
     test_denominator_suppression()
     test_dist_multi_seed()
