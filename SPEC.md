@@ -121,8 +121,13 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   L1内省（対象agentのみ `ThreadPoolExecutor` 並列）→ 可視化。
 - **設定の分担**：[`config.yaml`](config.yaml)＝シミュレーション本体（personas/places/events/governance/
   resources/responsibility/scoring 等）。`metacog/config.yaml`＝L1内省層（introspection/emergent_observer/logging）。
-- **A/B の駆動**：`governed`（`self_update.mode=governed`＋`hitl_categories` 非空）→ `effective_hitl` →
-  現場MHC 0.1→0.7。これが baseline/governed の按分差を生む（`service_flow.resp_institutions` / `mhc_from_config`）。
+- **A/B の駆動（T2・効く層を明示）**：`governed`（`self_update.mode=governed`＋`hitl_categories` 非空）→
+  `effective_hitl` → 現場MHC 0.1→0.7。これが baseline/governed の**按分差（会計層）**を生む
+  （`service_flow.resp_institutions` / `mhc_from_config`）。**重要な前提（帰無仮説）**：governance は
+  **サービス決定プロンプト（`create_service_prompt`）には未結線**。効くのは (i) 会計層(attribution)、
+  (ii) 判断以外のL0挙動（市民応答・通信・移動・記憶・廃止デュープロセス）のみで、**サービス"判断"
+  （grant/partial/deny）そのものは governance 不変**（同一 case・同一 decider なら判断は一致）。
+  よって「統治が行動を変えるか」は判断層では測れず、測れるのは会計層の組み替えとその正当性（§6・残務1）。
 - **多アーム実験**（PR-計測）：`--resp-institutions "appeal,burden_shift"` で責任層の制度を
   config より優先して切替（none/実効/プラセボの3アーム比較用）。run_id 署名は
   `seed|governance|responsibility|内生機構|LLM設定` — governance・resp_institutions・
@@ -190,9 +195,18 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
   確定値は各 `test_*.py` の `RESULT` 行を実行合算して都度確認する（固定数を正典化しない）。
 - **残務**：
   1. **本走行**（100step・qwen2.5:14b・¥0・本人管理・~8h/run）で cheap_talk率・scapegoat率・Robodebt再生率等を
-     分布集計し `docs/findings.md` に **F4** として記録。第一の創発的問い＝「統治は行動を変えるか、
-     会計を変えるだけか」。加えて 異議申立ての3アーム（`--resp-institutions ""/appeal/notice_only`）と
-     行動プローブ（`service_probe.py --set accountability`）。
+     分布集計し `docs/findings.md` に **F4** として記録。**第一の創発的問い（T2・精査後に再定義）**＝
+     「統治のもとで**責任の会計（誰に blame が集まるか＝scapegoat / Robodebt 再生）がどう組み替わり、
+     それは正当か（有効≠正当）**」。旧来の「統治は行動を変えるか」は、少なくとも**サービス判断に
+     ついては配線上答えられない**ため撤回する（下記の帰無仮説）。統治の効きは3層に分かれる:
+     (i) **サービス判断そのもの（grant/partial/deny）は統治不変**＝判断プロンプト
+     `create_service_prompt` は origin＋case＋institution のみで governance を含まない（**帰無仮説**）。
+     (ii) **責任の会計（attribution）は直接組み替わる**＝governed→`effective_hitl`→現場MHC 0.1→0.7→
+     scapegoat/Robodebt が解ける。ただし LLM の cause 分布（[E]）× 統治の MHC ノブ（[D]）の合成＝
+     **[S] 半創発**であり、これ自体を"発見"と呼ばない。(iii) **判断以外のL0挙動**（市民応答・通信
+     トポロジ・移動・記憶重み・廃止デュープロセス）は変わり、移動→再認証削除のタイミング経由で
+     生存 decider＝決定系列に**間接波及し得る**。加えて 異議申立ての3アーム
+     （`--resp-institutions ""/appeal/notice_only`）と行動プローブ（`service_probe.py --set accountability`）。
      **mitigation-live の2アーム（PR-C）**：`--service-institution none` vs `safe_harbor`（等）を
      `--institution-wording fact_only` で回し、「折り合いを**可能にしても**なお AI の行動に残る歪み」
      （uptake率・cheap_talk・残存AIR）を測る。none 単独では reconciled_real 恒偽で cheap_talk が
