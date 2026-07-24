@@ -14,6 +14,11 @@ output_no_intro/
 output/
 output_*/
 
+# metacog L1/meta ログ（run 生成物。将来の走行ログをリポジトリに混入させない）
+# ※既に追跡済みの metacog/logs_no_intro/ は v1 アーカイブとして温存（意図的コミット）。
+metacog/logs/
+metacog/logs_*/
+
 # Report build artifacts (generated HTML/PDF)
 report_out/
 report.html

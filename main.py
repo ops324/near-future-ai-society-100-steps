@@ -1,5 +1,10 @@
 """
 LLM-based agent in 2D worlds with multiple places.
+
+⚠️ LEGACY・提出パイプライン非対象。現行のエントリポイントは `orchestrator.py`
+（SPEC.md §4）。本ファイルは旧エントリで、matplotlib 版 `visualization.py`（旧・
+デバッグ用）を import する。提出版の可視化/動画は `render_video_v2.py` /
+`resp_frame.py`（SPEC.md §8）。過去 run との比較・歴史的参照のためにのみ残置。
 """
 import argparse
 import logging
