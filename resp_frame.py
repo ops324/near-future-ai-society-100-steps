@@ -21,6 +21,39 @@ from typing import Dict, List, Optional
 
 import responsibility as R
 
+
+# ───────────── 配信の firewall（設計の約束8・P2-B） ─────────────
+# 政策 audience に対しては、意識・尊厳・創発文化・情景(Part1) が責任トラック(Q1/Q2/Q3)の
+# 信頼を下げる。よって「名目上の分離」ではなく **配信形態そのもの** で物理分離する:
+# 責任トラックのバンドルには情景(Part1=simulation.mp4)を絶対に含めない。
+SCENE_PART1 = "simulation.mp4"          # 情景トラック（4K・render_video_v2 由来）
+RESP_PART2_DEFAULT = ("part2_baseline.mp4", "part2_governed.mp4")   # 責任トラック（統治なし/実効HITL）
+
+
+def delivery_bundles(part2_files=RESP_PART2_DEFAULT):
+    """配信バンドル定義（firewall）。責任トラックは Part1 情景を含めない。
+    - `responsibility`: **政策 audience 向け**（別途 PDF レポート＋本Part2のみ）。policy_safe=True。
+    - `full`: 一般/芸術 audience 向け（情景 Part1 ＋ 責任 Part2 を連結）。policy_safe=False＝政策には配らない。
+    返り値: {name: {"inputs":[mp4...], "out":mp4, "audience":str, "policy_safe":bool}}"""
+    p2 = list(part2_files)
+    return {
+        "responsibility": {
+            "inputs": p2, "out": "responsibility_track.mp4",
+            "audience": "policy", "policy_safe": True,
+        },
+        "full": {
+            "inputs": [SCENE_PART1] + p2, "out": "final_2part.mp4",
+            "audience": "general/art", "policy_safe": False,
+        },
+    }
+
+
+def concat_recipe(bundle: dict) -> str:
+    """1バンドルの ffmpeg concat コマンドを返す（純関数）。"""
+    lines = "".join(f"file '{f}'\\n" for f in bundle["inputs"])
+    return (f"printf \"{lines}\" > concat.txt && "
+            f"ffmpeg -f concat -safe 0 -i concat.txt -c copy {bundle['out']}")
+
 NODE_LABELS = {
     R.NODE_PROVIDER: "開発者/提供者",
     R.NODE_OPERATOR: "運用者",

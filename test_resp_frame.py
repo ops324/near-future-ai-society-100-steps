@@ -218,10 +218,34 @@ def test_render_frame_html():
     check("governed バッジ表示", "統治あり（実効HITL）" in gov)
 
 
+def test_delivery_firewall():
+    """P2-B firewall（約束8）: 責任トラック（政策 audience）に情景 Part1 を混ぜない。"""
+    b = RF.delivery_bundles()
+    resp = b["responsibility"]
+    full = b["full"]
+    check("責任トラックに Part1 情景を含めない", RF.SCENE_PART1 not in resp["inputs"])
+    check("責任トラックは policy_safe=True・出力名が責任トラック",
+          resp["policy_safe"] is True and resp["out"] == "responsibility_track.mp4")
+    check("責任トラックは Part2（baseline/governed）のみ",
+          resp["inputs"] == ["part2_baseline.mp4", "part2_governed.mp4"])
+    check("full は情景 Part1 を含み policy_safe=False（政策には配らない）",
+          RF.SCENE_PART1 in full["inputs"] and full["policy_safe"] is False)
+    # concat レシピにも firewall が反映される
+    check("責任トラックの concat に simulation.mp4 が現れない",
+          "simulation.mp4" not in RF.concat_recipe(resp))
+    check("full の concat には simulation.mp4 が現れる",
+          "simulation.mp4" in RF.concat_recipe(full))
+    # 任意の part2 集合でも firewall は保たれる
+    b2 = RF.delivery_bundles(part2_files=["p2_a.mp4"])
+    check("part2 差し替えでも責任トラックに情景は入らない",
+          RF.SCENE_PART1 not in b2["responsibility"]["inputs"])
+
+
 if __name__ == "__main__":
     for fn in [test_arm_of, test_frame_series_aggregation, test_cumulative_rates,
                test_service_gap, test_insight_and_context, test_trend_history_and_harm,
-               test_decider_names, test_cure_chips, test_render_frame_html]:
+               test_decider_names, test_cure_chips, test_render_frame_html,
+               test_delivery_firewall]:
         fn()
     print("\n========================================")
     passed = sum(1 for _, ok in results if ok)

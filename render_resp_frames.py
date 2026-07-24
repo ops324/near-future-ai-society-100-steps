@@ -89,7 +89,7 @@ def main():
     ap.add_argument("--fps", type=int, default=5)
     ap.add_argument("--no-render", action="store_true", help="HTML フレームのみ（Chromium 不要）")
     ap.add_argument("--print-concat", action="store_true",
-                    help="Part1 と結合する ffmpeg コマンド例を表示")
+                    help="配信バンドル（責任トラック＝政策向け／情景込み full＝一般向け）の結合例を表示")
     args = ap.parse_args()
 
     states = RF.frame_series(args.run, arm=args.arm, config_path=args.config)
@@ -112,11 +112,17 @@ def main():
     if encode_mp4(args.out_dir, args.mp4, args.fps):
         print(f"mp4 を生成しました → {args.mp4}")
     if args.print_concat:
-        print("\n# 2章構成（Part1情景 → Part2統治なし → Part2実効HITL）の結合例（同解像度前提）:")
+        bundles = RF.delivery_bundles()
         print("#  python render_resp_frames.py --run <baseline_run> --out-dir frames_resp_b --mp4 part2_baseline.mp4")
         print("#  python render_resp_frames.py --run <governed_run> --out-dir frames_resp_g --mp4 part2_governed.mp4")
-        print("printf \"file 'simulation.mp4'\\nfile 'part2_baseline.mp4'\\nfile 'part2_governed.mp4'\\n\""
-              " > concat.txt && ffmpeg -f concat -safe 0 -i concat.txt -c copy final_2part.mp4")
+        print("\n# ── 配信の firewall（約束8）: 政策 audience には責任トラックのみを配る ──")
+        rt = bundles["responsibility"]
+        print(f"# [責任トラック・政策 audience 向け] {rt['out']}（Part1情景を含めない・別途 PDF レポートと組で）:")
+        print(RF.concat_recipe(rt))
+        full = bundles["full"]
+        print(f"\n# [情景込み full・一般/芸術 audience 向け・政策には配らない] {full['out']}"
+              f"（Part1情景＋責任Part2。意識/創発文化の議論はこちら側に限定）:")
+        print(RF.concat_recipe(full))
 
 
 if __name__ == "__main__":

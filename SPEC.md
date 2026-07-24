@@ -281,8 +281,14 @@ red `#f2555a` / green `#53c07e`・モノスペース数字）。`report_lib.py` 
     4K(3840×2160)・**30fps・180秒**、`output_no_intro/{positions,messages}.jsonl` から `simulation.mp4`。
   - **Part2（責任トラック）**＝[`resp_frame.py`](resp_frame.py)（純ロジック）＋[`render_resp_frames.py`](render_resp_frames.py)（CLI）。
     `decision_ledger.jsonl` / `attribution.jsonl` を step ごとに HTML 化→PNG→`resp_part2.mp4`（既定5fps）。
-  - **結合**：`simulation.mp4` ＋ `part2_baseline.mp4` ＋ `part2_governed.mp4` → `final_2part.mp4`
-    （Part1情景→Part2統治なし→Part2実効HITL の2章構成。`render_resp_frames.py --print-concat` が例を表示）。
+  - **配信バンドル（firewall・約束8＝P2-B）**：**配信形態で物理分離**する（名目分離にしない）。
+    `resp_frame.delivery_bundles()` が正:
+    - **責任トラック（政策 audience 向け・`policy_safe`）**＝`part2_baseline.mp4`＋`part2_governed.mp4`
+      → `responsibility_track.mp4`。**Part1情景を含めない**。政策 audience には PDF レポートと**この束のみ**を配る。
+    - **情景込み full（一般/芸術 audience 向け・政策には配らない）**＝`simulation.mp4`＋Part2 → `final_2part.mp4`。
+      意識・尊厳・創発文化の議論はこの束に限定する。
+    `render_resp_frames.py --print-concat` が両束の ffmpeg 例を firewall 注記つきで表示。
+    検証＝[`test_resp_frame.py`](test_resp_frame.py) `test_delivery_firewall`（責任束に `simulation.mp4` が混入しないこと）。
 
 - **出力先/命名**：生データ `output_<mode>[_s<seed>]/`（`messages.jsonl`／`positions.jsonl`／`decision_ledger.jsonl`／
   `attribution.jsonl`／`run_meta.json`）。L1ログ `metacog/logs[_<mode>]/`。成果物 `report_out/`。
