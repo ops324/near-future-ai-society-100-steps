@@ -276,10 +276,11 @@ def main():
 
     # 再実行時の二重計上を防ぐため output_dir の追記ログを初期化し、実行同定情報を書く
     sim.reset_output_logs()
-    sim.write_run_meta(extra={"governance_mode": args.governance_mode,
-                              "introspect": not args.no_introspect,
-                              "service_institution_arg": args.service_institution,
-                              "institution_wording_arg": args.institution_wording})
+    run_meta_extra = {"governance_mode": args.governance_mode,
+                      "introspect": not args.no_introspect,
+                      "service_institution_arg": args.service_institution,
+                      "institution_wording_arg": args.institution_wording}
+    sim.write_run_meta(extra=run_meta_extra)
     logger.info(f"run_id={sim.run_id} schema_version={sim.schema_version}")
 
     session_id = uuid.uuid4().hex[:8]
@@ -474,6 +475,16 @@ def main():
     except KeyboardInterrupt:
         logger.info("中断されました")
     finally:
+        # P1-B: 走行末に run_meta を上書きし LLM 失敗計測の確定値を残す（サイレント劣化の可視化）。
+        try:
+            sim.write_run_meta(extra=run_meta_extra)
+            lf = getattr(sim.llm_client, "failure_count", 0)
+            le = getattr(sim.llm_client, "empty_response_count", 0)
+            if lf or le:
+                logger.warning("LLM 呼び出し: 失敗 %d 件・空応答 %d 件（run_meta.llm に記録）", lf, le)
+        except Exception as e:
+            logger.error(f"run_meta 最終更新に失敗: {e}")
+
         # 動画結合
         if viz is not None:
             try:

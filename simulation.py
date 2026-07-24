@@ -397,7 +397,14 @@ class Simulation:
                 self.resp_config.get('institution_wording', 'suggestive')),
             # 実行前修正: LLM の同定情報（クロスモデル比較の同定用）。digest は
             # ベストエフォート（Ollama 未起動なら null。run_id 署名には不使用）。
-            "llm": {**self.llm_meta, "digest": self.llm_client.model_digest()},
+            # P1-B: LLM 呼び出しの失敗計測（サイレント劣化の可視化。走行末に再度書けば確定値）。
+            "llm": {
+                **self.llm_meta,
+                "digest": self.llm_client.model_digest(),
+                "calls": getattr(self.llm_client, "call_count", None),
+                "failures": getattr(self.llm_client, "failure_count", None),
+                "empty_responses": getattr(self.llm_client, "empty_response_count", None),
+            },
         }
         if extra:
             meta.update(extra)
