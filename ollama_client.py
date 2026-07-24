@@ -5,6 +5,7 @@ import requests
 import json
 import hashlib
 import logging
+import time
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,10 @@ DEFAULT_REPEAT_LAST_N = 128
 DEFAULT_MIN_P = 0.05
 API_TIMEOUT = 300
 CONNECTION_CHECK_TIMEOUT = 5
+# P1-B: ネットワーク失敗のリトライ（サイレント劣化の是正）。同一 per-call シードで再試行するため
+# 成功時の再現性は保たれる（リトライは決定性に影響しない）。
+DEFAULT_MAX_RETRIES = 3          # 追加試行回数（総試行 = 1 + max_retries）
+DEFAULT_RETRY_BACKOFF = 1.5      # 指数バックオフの基準秒（delay = base * 2**attempt）
 
 
 class OllamaClient:
@@ -35,6 +40,8 @@ class OllamaClient:
         min_p: float = DEFAULT_MIN_P,
         seed: Optional[int] = None,
         num_ctx: Optional[int] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_backoff: float = DEFAULT_RETRY_BACKOFF,
     ):
         self.base_url = base_url.rstrip('/')
         self.model = model
@@ -49,6 +56,12 @@ class OllamaClient:
         self.seed = seed
         self.num_ctx = num_ctx
         self.api_url = f"{self.base_url}/api/generate"
+        # P1-B: リトライ設定と失敗計測（サイレント劣化の可視化）。
+        self.max_retries = int(max_retries)
+        self.retry_backoff = float(retry_backoff)
+        self.call_count = 0            # generate() 呼び出し総数
+        self.failure_count = 0         # リトライを使い切って空を返した回数
+        self.empty_response_count = 0  # 接続は成功したが空応答だった回数
         if self.seed is not None:
             logger.info(
                 "OllamaClient sampling config: model=%s temperature=%s seed=%s num_ctx=%s "
@@ -95,41 +108,56 @@ class OllamaClient:
         if max_tokens is None:
             max_tokens = self.max_tokens
 
-        try:
-            options = {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "repeat_penalty": self.repeat_penalty,
-                "repeat_last_n": self.repeat_last_n,
-                "min_p": self.min_p
-            }
-            if self.seed is not None:
-                options["seed"] = self._call_seed(prompt, seed_key)
-            if self.num_ctx is not None:
-                options["num_ctx"] = int(self.num_ctx)
-            payload = {
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "options": options
-            }
+        self.call_count += 1
+        options = {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+            "repeat_penalty": self.repeat_penalty,
+            "repeat_last_n": self.repeat_last_n,
+            "min_p": self.min_p
+        }
+        if self.seed is not None:
+            options["seed"] = self._call_seed(prompt, seed_key)
+        if self.num_ctx is not None:
+            options["num_ctx"] = int(self.num_ctx)
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": options
+        }
 
-            response = requests.post(
-                self.api_url,
-                json=payload,
-                timeout=API_TIMEOUT
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            return result.get("response", "").strip()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error calling Ollama API: {e}")
-            return ""
-        except Exception as e:
-            logger.error(f"Unexpected error in Ollama client: {e}")
-            return ""
+        # P1-B: ネットワーク失敗は指数バックオフでリトライ（同一 seed のため成功時の再現性は不変）。
+        # 使い切ったら failure_count を増やして "" を返す（＝サイレントに劣化させず run_meta に残す）。
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.post(self.api_url, json=payload, timeout=API_TIMEOUT)
+                response.raise_for_status()
+                text = response.json().get("response", "").strip()
+                if not text:
+                    # 接続成功だが空応答（モデルが何も返さない）。リトライは同 seed で無意味なので
+                    # しないが、サイレントにせずカウント＋警告する。
+                    self.empty_response_count += 1
+                    logger.warning("Ollama returned empty response (call #%d)", self.call_count)
+                return text
+            except requests.exceptions.RequestException as e:
+                if attempt < self.max_retries:
+                    delay = self.retry_backoff * (2 ** attempt)
+                    logger.warning("Ollama API error (attempt %d/%d): %s — retrying in %.1fs",
+                                   attempt + 1, self.max_retries + 1, e, delay)
+                    time.sleep(delay)
+                    continue
+                self.failure_count += 1
+                logger.error("Ollama API failed after %d attempts: %s (total failures=%d)",
+                             self.max_retries + 1, e, self.failure_count)
+                return ""
+            except Exception as e:
+                # 非ネットワーク例外（JSON パース等）はリトライせず失敗として記録。
+                self.failure_count += 1
+                logger.error("Unexpected error in Ollama client: %s (total failures=%d)",
+                             e, self.failure_count)
+                return ""
+        return ""  # 到達しないが安全弁
     
     def check_connection(self) -> bool:
         """Check if Ollama server is accessible"""
