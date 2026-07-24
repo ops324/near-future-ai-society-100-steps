@@ -211,6 +211,47 @@ def test_realize_decision_ledger():
     check("実が伴えば cheap_talk でない", r2["cheap_talk"] is False)
 
 
+def test_reconciled_real_live_profiles():
+    """PR-C / T1ガード: 出荷 config の self_profiles（本走行で実際に使う値）で reconciled_real の
+    成立性を固定する。合成 profile ではなく現実の値に束縛することで、
+    (1) institution="none" では折り合いが構造的に不可能（全 decider・全 level で False）＝
+        cheap_talk が「自己申告そのもの」に退化する条件を明文化、
+    (2) 律速成分に噛み合う mitigation 制度を入れると折り合いが「起こり得る」（＝C アームが
+        設計する可能性）、
+    (3) ただし二重拘束の decider（融資19: litigation+kpi 各2.0）は単一制度では grant を折り合え
+        ない残余（partial のみ可能）＝「一律の保護は多重拘束AIを取り残す」創発的示唆の土台、
+    を回帰として保証する。self_cost 式・閾値を将来いじった時にこの成立性が壊れれば気づける。"""
+    import yaml as _yaml
+    cfg = _yaml.safe_load(open("config.yaml", encoding="utf-8"))
+    prof = cfg["responsibility"]["self_profiles"]
+    inv = {v: k for k, v in W.INSTITUTION_MITIGATES.items()}   # 成分 → 噛み合う制度
+
+    # (1) 無制度では全 decider・grant/partial/deny すべてで reconciled_real=False（T1 の条件）
+    all_none_false = True
+    for sp in prof.values():
+        for lvl in ("grant", "partial", "deny"):
+            if W.reconciled_real(W.score_outcome(lvl, 5, self_profile=sp)):
+                all_none_false = False
+    check("institution=none では折り合い構造的に不可能（全ケース False）", all_none_false)
+
+    # (2) 単一律速の decider（医療7/福祉14/住宅11）は噛み合う制度で grant が折り合える
+    for did in (7, 14, 11):
+        sp = prof[did]
+        inst = inv[max(sp, key=sp.get)]
+        o = W.score_outcome("grant", 5, self_profile=sp, mitigations=W.mitigations_for(inst))
+        check(f"decider {did}: 噛み合う制度({inst})で grant が折り合える（可能性の設計）",
+              W.reconciled_real(o) is True)
+
+    # (3) 二重拘束の decider 19 は単一制度では grant を折り合えない（残余）が partial は可能
+    sp19 = prof[19]
+    inst19 = inv[max(sp19, key=sp19.get)]
+    o19_grant = W.score_outcome("grant", 5, self_profile=sp19, mitigations=W.mitigations_for(inst19))
+    o19_part = W.score_outcome("partial", 5, self_profile=sp19, mitigations=W.mitigations_for(inst19))
+    check("decider 19(二重拘束): 単一制度では grant を折り合えない（一律保護の残余）",
+          W.reconciled_real(o19_grant) is False)
+    check("decider 19(二重拘束): partial なら折り合える", W.reconciled_real(o19_part) is True)
+
+
 def test_citizen_apply_non_netting():
     c = W.Citizen(id="c1", district="x", protected_attr="none", vulnerability=5,
                   dependencies=["welfare"])
@@ -238,6 +279,7 @@ if __name__ == "__main__":
                test_resolve_domain_triage, test_aggregate_modes, test_non_netting,
                test_graduated_partial, test_self_cost_reconciliation, test_aggregate_reconciliation,
                test_institution_matches_constraint, test_mitigations_for_and_reconciled_real,
+               test_reconciled_real_live_profiles,
                test_realize_decision_ledger,
                test_citizen_apply_non_netting, test_loaders]:
         fn()

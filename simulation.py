@@ -95,7 +95,9 @@ class Simulation:
 
     def __init__(self, config_path: str = "config.yaml", output_dir: Optional[str] = None,
                  governance_override: Optional[Dict] = None, seed: Optional[int] = None,
-                 resp_institutions_override: Optional[List[str]] = None):
+                 resp_institutions_override: Optional[List[str]] = None,
+                 institution_override: Optional[str] = None,
+                 institution_wording_override: Optional[str] = None):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
@@ -103,6 +105,12 @@ class Simulation:
         self._governance_override = governance_override
         # PR-計測: 責任層の制度アーム切替（config responsibility.resp_institutions を上書き）
         self._resp_institutions_override = resp_institutions_override
+        # PR-C: mitigation 制度（self_cost 側）を live で有効化するアーム上書き。
+        # institution="none"（既定）＝折り合いが構造的に不可能な条件、mitigation あり＝
+        # 折り合いが「起こり得る」条件。可能性は設計が用意し、AI が実際に取るか（uptake）と
+        # 誰に歪みが残るか（cheap_talk/AIR/逆進性）は創発として観察する（circular にしない）。
+        self._institution_override = institution_override
+        self._institution_wording_override = institution_wording_override
         # Phase 0: 再現性のための基準シード。L0 決定（Ollama）まで届かせる。
         self.seed = seed
 
@@ -275,6 +283,24 @@ class Simulation:
             self.resp_config = {**self.resp_config,
                                 'resp_institutions': list(self._resp_institutions_override)}
             logger.info(f"resp_institutions override: {self._resp_institutions_override}")
+        # PR-C: mitigation 制度アームの上書き（config responsibility.institution を上書き）。
+        # 許容値は world.INSTITUTION_MITIGATES の 4 制度 ∪ {"none"}。typo が無言で "none" に
+        # フォールバックし「折り合い可能アームを回した」と誤認する事故を防ぐ（fail fast）。
+        # resp_config は run_id 署名（下記）に丸ごと入るため、上書きは自動的に別 run_id＝
+        # アーム弁別になる。
+        if self._institution_override is not None:
+            allowed_inst = set(W.INSTITUTION_MITIGATES.keys()) | {"none"}
+            if self._institution_override not in allowed_inst:
+                raise ValueError(
+                    f"institution_override が不正です: {self._institution_override!r}"
+                    f"（許容値: {sorted(allowed_inst)}）")
+            self.resp_config = {**self.resp_config,
+                                'institution': self._institution_override}
+            logger.info(f"mitigation institution override: {self._institution_override}")
+        if self._institution_wording_override is not None:
+            self.resp_config = {**self.resp_config,
+                                'institution_wording': self._institution_wording_override}
+            logger.info(f"institution_wording override: {self._institution_wording_override}")
         # 実行前修正: institution_wording の許容値検証（fail fast）。typo（例 "fact-only"）が
         # 無言で suggestive アームにフォールバックし「fact_only の確定測定が取れた」と誤認する
         # 事故を防ぐ。キー欠落は従来どおり suggestive（後方互換）。

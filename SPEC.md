@@ -74,6 +74,11 @@
 
 - **cheap_talk / reconciled_real** — `reconciled`（AIの自己申告）と `reconciled_real`（world由来＝met≥0.5 かつ
   self_cost 低）が食い違う現象。**自己申告でなく挙動（reconciled_real）を測る**のが設計の肝。
+  **重要な限界（T1）**：既定 `institution:"none"` の本走行では self_cost がどの level でも高く
+  `reconciled_real` が恒偽になり、`cheap_talk ≡ reconciled_claim`（自己申告に退化）する。
+  "挙動での答え合わせ"を効かせるには**折り合いが起こり得る条件＝mitigation-live アーム（PR-C・
+  `--service-institution`＋`--institution-wording fact_only`）が必要**。折り合いの可能性は設計が
+  用意し、AIが実際に取るか（uptake）と残る歪みは創発として観る。値の来歴＝`docs/value_provenance.md §2.11`。
 
 - **mitigation と制度（self_cost 側）** — `safe_harbor`（善意供給の免責）／`insurance`（存続リスクの社会化）／
   `kpi_redesign`（福祉でKPI評価）／`human_backstop`（人間の共同責任）。AIの律速（self_cost成分）を下げ折り合いを可能にする。
@@ -188,6 +193,12 @@ orchestrator.py  ← エントリ（step ループ・L1 起動・創発観察・
      分布集計し `docs/findings.md` に **F4** として記録。第一の創発的問い＝「統治は行動を変えるか、
      会計を変えるだけか」。加えて 異議申立ての3アーム（`--resp-institutions ""/appeal/notice_only`）と
      行動プローブ（`service_probe.py --set accountability`）。
+     **mitigation-live の2アーム（PR-C）**：`--service-institution none` vs `safe_harbor`（等）を
+     `--institution-wording fact_only` で回し、「折り合いを**可能にしても**なお AI の行動に残る歪み」
+     （uptake率・cheap_talk・残存AIR）を測る。none 単独では reconciled_real 恒偽で cheap_talk が
+     自己申告に退化する（T1）ため、この対が"挙動での答え合わせ"を効かせる前提。
+     **循環回避**：主張は「制度が世界を回す」ではなく「可能にした条件下の残余」。折り合いの可能性は
+     設計・取捨は創発（`docs/value_provenance.md §2.11` mitigation-live アーム）。
   2. **精緻化**（正当性テストの合否基準・self_cost mitigation の governance 本結線（appeal は PR #18 で
      行動化済み）・self-mod/personhood_shield の live 検出）。
 - **提出スコープ**：**`--no-introspect` 単層のみ**。内省層あり（L1）は将来の A/B 比較用に温存（`metacog/` は残置）。

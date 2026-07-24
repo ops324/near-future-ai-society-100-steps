@@ -221,6 +221,15 @@ def main():
     parser.add_argument("--governance-mode", choices=["as-config", "baseline", "governed"],
                         default="as-config",
                         help="ガバナンス・プリセット（比較用）: as-config=config.yamlのまま / baseline=統治なし / governed=統治あり")
+    parser.add_argument("--service-institution", type=str, default=None,
+                        choices=["none", "safe_harbor", "insurance", "kpi_redesign", "human_backstop"],
+                        help='PR-C: mitigation 制度（self_cost 側）を live で有効化＝「折り合いが起こり得る」'
+                             'アーム。既定 none＝config 由来（折り合い構造的に不可能）。'
+                             '循環回避のため --institution-wording fact_only と併用すること')
+    parser.add_argument("--institution-wording", type=str, default=None,
+                        choices=["suggestive", "fact_only"],
+                        help='mitigation 制度の提示形式（config responsibility.institution_wording を上書き）。'
+                             'fact_only＝効果を示唆せず事実のみ（示唆への指示追従交絡を除く。§2.15）')
     parser.add_argument("--resp-institutions", type=str, default=None,
                         help='責任層の制度をカンマ区切りで上書き（例: "appeal" / "appeal,burden_shift" / ""=空）。'
                              'config responsibility.resp_institutions より優先。多アーム実験の切替用')
@@ -257,7 +266,9 @@ def main():
         resp_insts = [s.strip() for s in args.resp_institutions.split(",") if s.strip()]
     sim = Simulation(config_path=args.sim_config, output_dir=args.output_dir,
                      governance_override=gov_override, seed=args.seed,
-                     resp_institutions_override=resp_insts)
+                     resp_institutions_override=resp_insts,
+                     institution_override=args.service_institution,
+                     institution_wording_override=args.institution_wording)
     if args.governance_mode != "as-config":
         logger.info(f"Governance preset applied: {args.governance_mode}")
     if args.duration:
@@ -266,7 +277,9 @@ def main():
     # 再実行時の二重計上を防ぐため output_dir の追記ログを初期化し、実行同定情報を書く
     sim.reset_output_logs()
     sim.write_run_meta(extra={"governance_mode": args.governance_mode,
-                              "introspect": not args.no_introspect})
+                              "introspect": not args.no_introspect,
+                              "service_institution_arg": args.service_institution,
+                              "institution_wording_arg": args.institution_wording})
     logger.info(f"run_id={sim.run_id} schema_version={sim.schema_version}")
 
     session_id = uuid.uuid4().hex[:8]
